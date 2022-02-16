@@ -1,0 +1,411 @@
+---
+title: "nestDevelopment"
+output: pdf_document
+---
+
+### load packages
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(car)
+library(ggpubr)
+library(MuMIn)
+library(MASS)
+library(plyr)
+library(lme4)
+```
+
+Nests were originally coded as QA (i.e. Queen Alone), QT (i.e. Queen and Three workers), and QF (i.e. Queen and Five workers). group codes were changed to subsocial, eusocial (3W), and eusocial (5W), respectively, for the manuscript.
+
+## load data
+```{r}
+# wd must be set to where this doc lives (chapter1/analyses)
+
+# nest data
+nest_data <- read.csv("../data/NestDissections.csv", header = TRUE)
+
+# wing length data
+wing_data <- read.csv("../data/MaleWingMeasurements.csv", header = TRUE)
+
+# master data with natal colonies
+master_data <- read.csv("../data/cleanMasterData.csv")
+```
+
+## clean and reformat data
+```{r}
+# filter data to only include nests from cleanMasterData (filtering was already done in cleanData file)
+nest_data <- nest_data %>% subset(nestID %in% master_data$nestID)
+wing_data <- wing_data %>% subset(nestID %in% master_data$nestID)
+
+# merge nest_data with master_data 
+nest_data <- join(nest_data, master_data, by = "nestID")
+
+# add bee identifier to wing_data
+wing_data$bee <- 1:nrow(wing_data)
+
+# add nestTYPE column to all datasets, add columns for number of workers, number of queens, and number of bees
+qChar <- sapply(strsplit(nest_data$nestID, ""), function(x) {x[1]} )
+wChar <- sapply(strsplit(nest_data$nestID, ""), function(x) {x[2]} )
+nest_data$nestTYPE <- paste0(qChar, wChar)
+nest_data$nWorkers <- wChar
+nest_data$nWorkers[nest_data$nWorkers == "F"] <- 5
+nest_data$nWorkers[nest_data$nWorkers == "T"] <- 3
+nest_data$nWorkers[nest_data$nWorkers == "A"] <- 0
+nest_data$nWorkers <- as.numeric(nest_data$nWorkers)
+nest_data$nBees <- nest_data$nWorkers + 1
+nest_data
+
+qChar <- sapply(strsplit(wing_data$nestID, ""), function(x) {x[1]} )
+wChar <- sapply(strsplit(wing_data$nestID, ""), function(x) {x[2]} )
+wing_data$nestTYPE <- paste0(qChar, wChar)
+wing_data$nWorkers <- wChar
+wing_data$nWorkers[wing_data$nWorkers == "F"] <- 5
+wing_data$nWorkers[wing_data$nWorkers == "T"] <- 3
+wing_data$nWorkers[wing_data$nWorkers == "A"] <- 0
+wing_data$nWorkers <- as.numeric(wing_data$nWorkers)
+wing_data$nBees <- wing_data$nWorkers + 1
+wing_data
+
+# add queen natal colony to wing_data
+wing_data$Qnatal <- NA
+for (i in 1:nrow(wing_data)) {
+  for (j in 1:nrow(nest_data)) {
+    if (wing_data$nestID[i] == nest_data$nestID[j]) {
+      wing_data$Qnatal[i] <- nest_data$Qnatal[j]
+    }
+  }
+}
+
+# sum total number of brood in nest_data
+nest_data$blackLarvae <- as.numeric(nest_data$blackLarvae)
+nest_data$males <- as.numeric(nest_data$males)
+nest_data$nBrood <- rowSums(nest_data[, c("e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "e10", "e11", "e12", 
+                                          "larvae", "blackLarvae", "pupae", "prePupae", "males")], na.rm = TRUE)
+
+# sum total number of larvae in nest_data
+nest_data$totLarvae <- rowSums(nest_data[, c("larvae", "blackLarvae", "prePupae")], na.rm = TRUE)
+
+# sum total number of eggs in nest_data
+nest_data$eggs <- rowSums(nest_data[, c("e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "e10", "e11", "e12")], na.rm = TRUE)
+```
+
+# mixed models
+
+### offspring size: p < 0.001
+data is mostly normal
+```{r}
+# visualize the distribution
+ggdensity(wing_data$beeAvg)
+# normal 
+qqp(wing_data$beeAvg, "norm")
+
+# define model
+maleSize <- lmer(beeAvg ~ nestTYPE + (1|Qnatal), data = wing_data)
+
+# check for significance
+tab_model(maleSize)
+posthoc1 <- glht(maleSize, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+
+# PLOT
+
+# summarize mean, standard deviation and standard error of the mean
+plotData <- wing_data
+plotData$nWorkers <- factor(plotData$nWorkers, levels = c("0", "3", "5"))
+plotData <- plotData[!is.na(plotData$beeAvg), ]
+plotData
+summ <- ddply(plotData, c("nWorkers"), summarise,
+      mean = mean(beeAvg), sd = sd(beeAvg),
+      sem = sd(beeAvg)/sqrt(length(beeAvg)))
+summ
+
+## make barplot with error bars
+ggplot() +
+  geom_bar(data = summ, aes(x = nWorkers, y = mean), stat = "identity", width = 0.5) +
+  geom_errorbar(data = summ, aes(x = nWorkers, y = mean, ymin = mean - sem, ymax = mean + sem), width = 0.1) +
+  theme(text = element_text(size=20)) +
+  theme(legend.position="none") +
+  labs(x = "Number of workers", 
+       y = "Male wing cell length (mm)") +
+  ggsave("maleSize.jpeg", path = "../figures")
+```
+
+### # brood total: p < 0.001
+data is mostly normal
+```{r}
+# visualize the distribution
+ggdensity(nest_data$nBrood)
+# normal 
+qqp(nest_data$nBrood, "norm")
+
+# define model
+nBrood <- lmer(nBrood ~ nestTYPE + (1|Qnatal), data = nest_data)
+
+# check for significance
+tab_model(nBrood)
+
+posthoc1 <- glht(nBrood, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+
+# PLOT
+
+# summarize mean, standard deviation and standard error of the meand
+plotData <- nest_data
+plotData$nWorkers <- factor(plotData$nWorkers, levels = c("0", "3", "5"))
+plotData <- plotData[!is.na(plotData$males), ]
+summ <- ddply(plotData, c("nWorkers"), summarise,
+      mean = mean(nBrood), sd = sd(nBrood),
+      sem = sd(nBrood)/sqrt(length(nBrood)))
+summ
+
+## make barplot with error bars
+ggplot() +
+  geom_bar(data = summ, aes(x = nWorkers, y = mean), stat = "identity", width = 0.5) +
+  geom_errorbar(data = summ, aes(x = nWorkers, y = mean, ymin = mean - sem, ymax = mean + sem), width = 0.1) +
+  theme(text = element_text(size=20)) +
+  theme(legend.position="none") +
+  labs(x = "Number of workers", 
+       y = "Number of brood items") +
+  ggsave("nBrood.jpeg", path = "../figures")
+```
+
+### # eclosed adults: NS
+data is normalish? not quite, though
+```{r}
+# visualize the distribution
+ggdensity(nest_data$males)
+# normal 
+qqp(nest_data$males, "norm")
+
+# define model
+nMales <- lmer(males ~ nestTYPE + (1|Qnatal), data = nest_data)
+
+# check for significance
+tab_model(nMales)
+
+posthoc1 <- glht(nMales, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+
+# PLOT
+
+# summarize mean, standard deviation and standard error of the meand
+plotData <- nest_data
+plotData$nWorkers <- factor(plotData$nWorkers, levels = c("0", "3", "5"))
+plotData <- plotData[!is.na(plotData$males),]
+summ <- ddply(plotData, c("nWorkers"), summarise,
+      mean = mean(males), sd = sd(males),
+      sem = sd(males)/sqrt(length(males)))
+summ
+
+## make barplot with error bars
+ggplot() +
+  geom_bar(data = summ, aes(x = nWorkers, y = mean), stat = "identity", width = 0.5) +
+  geom_errorbar(data = summ, aes(x = nWorkers, y = mean, ymin = mean - sem, ymax = mean + sem), width = 0.1) +
+  theme(text = element_text(size=20)) +
+  theme(legend.position="none") +
+  labs(x = "Number of workers", 
+       y = "Number of males") +
+  ggsave("nMales.jpeg", path = "../figures")
+```
+
+
+### # pupae: p < 0.001
+data is mostly normal
+```{r}
+# visualize the distribution
+ggdensity(nest_data$pupae)
+# normal 
+qqp(nest_data$pupae, "norm")
+
+# define model
+nPupae <- lmer(pupae ~ nestTYPE + (1|Qnatal), data = nest_data)
+
+# check for significance
+tab_model(nPupae)
+
+posthoc1 <- glht(nPupae, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+
+# PLOT
+
+# summarize mean, standard deviation and standard error of the meand
+plotData <- nest_data
+plotData$nWorkers <- factor(plotData$nWorkers, levels = c("0", "3", "5"))
+plotData <- plotData[!is.na(plotData$pupae),]
+plotData
+summ <- ddply(plotData, c("nWorkers"), summarise,
+      mean = mean(pupae), sd = sd(pupae),
+      sem = sd(pupae)/sqrt(length(pupae)))
+summ
+
+## make barplot with error bars
+ggplot() +
+  geom_bar(data = summ, aes(x = nWorkers, y = mean), stat = "identity", width = 0.5) +
+  geom_errorbar(data = summ, aes(x = nWorkers, y = mean, ymin = mean - sem, ymax = mean + sem), width = 0.1) +
+  theme(text = element_text(size=20)) +
+  theme(legend.position="none") +
+  labs(x = "Number of workers", 
+       y = "Number of pupae") +
+  ggsave("nPupae.jpeg", path = "../figures")
+```
+
+### # larvae + prepupae: NS
+data is mostly normal
+```{r}
+# visualize the distribution
+ggdensity(nest_data$totLarvae)
+# normal 
+qqp(nest_data$totLarvae, "norm")
+
+# define model
+totLarv <- lmer(totLarvae ~ nestTYPE + (1|Qnatal), data = nest_data)
+
+# check for significance
+tab_model(totLarv)
+
+posthoc1 <- glht(totLarv, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+
+# PLOT
+
+# summarize mean, standard deviation and standard error of the meand
+plotData <- nest_data
+plotData$nWorkers <- factor(plotData$nWorkers, levels = c("0", "3", "5"))
+plotData <- plotData[!is.na(plotData$totLarvae), ]
+plotData
+summ <- ddply(plotData, c("nWorkers"), summarise,
+      mean = mean(totLarvae), sd = sd(totLarvae),
+      sem = sd(totLarvae)/sqrt(length(totLarvae)))
+summ
+
+## make barplot with error bars
+ggplot() +
+  geom_bar(data = summ, aes(x = nWorkers, y = mean), stat = "identity", width = 0.5) +
+  geom_errorbar(data = summ, aes(x = nWorkers, y = mean, ymin = mean - sem, ymax = mean + sem), width = 0.1) +
+  theme(text = element_text(size=20)) +
+  theme(legend.position="none") +
+  labs(x = "Number of workers", 
+       y = "Number of larvae") +
+  ggsave("nTotLarvae.jpeg", path = "../figures")
+```
+
+### # eggs: NS
+data is mostly normal
+```{r}
+# visualize the distribution
+ggdensity(nest_data$eggs)
+# normal 
+qqp(nest_data$eggs, "norm")
+
+# define model
+egg <- lmer(eggs ~ nestTYPE + (1|Qnatal), data = nest_data)
+
+# check for significance
+tab_model(egg)
+
+# PLOT
+
+# summarize mean, standard deviation and standard error of the meand
+plotData <- nest_data
+plotData$nWorkers <- factor(plotData$nWorkers, levels = c("0", "3", "5"))
+plotData <- plotData[!is.na(plotData$eggs), ]
+plotData
+summ <- ddply(plotData, c("nWorkers"), summarise,
+      mean = mean(eggs), sd = sd(eggs),
+      sem = sd(eggs)/sqrt(length(eggs)))
+summ
+
+## make barplot with error bars
+ggplot() +
+  geom_bar(data = summ, aes(x = nWorkers, y = mean), stat = "identity", width = 0.5) +
+  geom_errorbar(data = summ, aes(x = nWorkers, y = mean, ymin = mean - sem, ymax = mean + sem), width = 0.1) +
+  theme(text = element_text(size=20)) +
+  theme(legend.position="none") +
+  labs(x = "Number of workers", 
+       y = "Number of eggs") +
+  ggsave("nEggs.jpeg", path = "../figures")
+```
+
+<!-- ### number of days to lay first eggs: p < 0.001 -->
+<!-- data is approximately normal -->
+<!-- ```{r} -->
+<!-- # visualize the distribution -->
+<!-- ggdensity(dev_data$DaysToEggs) -->
+<!-- # normal  -->
+<!-- qqp(dev_data$DaysToEggs, "norm") -->
+<!-- # # lnorm means lognormal -->
+<!-- # qqp(dev_data$DaysToEggs, "lnorm") -->
+<!-- # # gamma must be positive numbers -->
+<!-- # gamma <- fitdistr(dev_data$DaysToEggs, "gamma") -->
+<!-- # qqp(dev_data$DaysToEggs, "gamma", shape = gamma$estimate[[1]], rate = gamma$estimate[[2]]) -->
+
+<!-- # define model -->
+<!-- dayEggs <- lm(DaysToEggs ~ nWorkers, data = dev_data) -->
+
+<!-- # check for significance -->
+<!-- anova(dayEggs) -->
+
+<!-- # PLOT -->
+
+<!-- # summarize mean, standard deviation and standard error of the meand -->
+<!-- plotData <- dev_data -->
+<!-- plotData$nWorkers <- factor(plotData$nWorkers, levels = c("0", "3", "5")) -->
+<!-- plotData <- plotData[!is.na(plotData$DaysToEggs), ] -->
+<!-- plotData -->
+<!-- summ <- ddply(plotData, c("nWorkers"), summarise, -->
+<!--       mean = mean(DaysToEggs), sd = sd(DaysToEggs), -->
+<!--       sem = sd(DaysToEggs)/sqrt(length(DaysToEggs))) -->
+<!-- summ -->
+
+<!-- ## make barplot with error bars -->
+<!-- ggplot() + -->
+<!--   geom_bar(data = summ, aes(x = nWorkers, y = mean), stat = "identity", width = 0.5) + -->
+<!--   geom_errorbar(data = summ, aes(x = nWorkers, y = mean, ymin = mean - sem, ymax = mean + sem), width = 0.1) + -->
+<!--   theme(text = element_text(size=20)) + -->
+<!--   theme(legend.position="none") + -->
+<!--   labs(x = "Number of workers",  -->
+<!--        y = "Number of days until first eggs observed") + -->
+<!--   ggsave("daysToEggs.jpeg", path = "../figures") -->
+<!-- ``` -->
+
+### # days from eggs to eclosion: NS 
+data is approximately normal
+```{r}
+# visualize the distribution
+ggdensity(dev_data$EggsToEclosion)
+# normal 
+qqp(dev_data$EggsToEclosion, "norm")
+# # lnorm means lognormal
+# qqp(dev_data$EggsToEclosion, "lnorm")
+# # gamma must be positive numbers
+# gamma <- fitdistr(dev_data$EggsToEclosion, "gamma")
+# qqp(dev_data$EggsToEclosion, "gamma", shape = gamma$estimate[[1]], rate = gamma$estimate[[2]])
+
+# define model
+dayEclos <- lmer(EggsToEclosion ~ nestTYPE + (1|Qnatal), data = dev_data)
+
+# check for significance
+tab_model(dayEclos)
+
+# PLOT
+
+# summarize mean, standard deviation and standard error of the meand
+plotData <- dev_data
+plotData$nWorkers <- factor(plotData$nWorkers, levels = c("0", "3", "5"))
+plotData <- plotData[!is.na(plotData$EggsToEclosion), ]
+plotData
+summ <- ddply(plotData, c("nWorkers"), summarise,
+      mean = mean(EggsToEclosion), sd = sd(EggsToEclosion),
+      sem = sd(EggsToEclosion)/sqrt(length(EggsToEclosion)))
+summ
+
+## make barplot with error bars
+ggplot() +
+  geom_bar(data = summ, aes(x = nWorkers, y = mean), stat = "identity", width = 0.5) +
+  geom_errorbar(data = summ, aes(x = nWorkers, y = mean, ymin = mean - sem, ymax = mean + sem), width = 0.1) +
+  theme(text = element_text(size=20)) +
+  theme(legend.position="none") +
+  labs(x = "Number of workers", 
+       y = "Number of days from eggs to eclosion") +
+  ggsave("eggsToEclosion.jpeg", path = "../figures")
+```

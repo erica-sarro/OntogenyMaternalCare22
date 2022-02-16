@@ -1,1 +1,13 @@
 
+To download information about all videos watched (including those without any observed behaviors), we have to download an additional file for each project from Boris. To do this:
+1) Open project file in BORIS
+2) Analysis -> Synthetic time budget
+3) Press select all and then ok
+4) Press ok
+5) Save file as nest name eg. "QF01" as a .csv file in the allBORISfiles directory
+6) Click okay without selecting any additional behaviors to subtract from total time
+
+Videos are named in the format "camera / nestID / YYYYMMDD / HH", where camera is either "for" (foraging/food collection chambers) or "nest"
+ (interior of nest)
+ 
+Nests were originally coded as QA (i.e. Queen Alone), QT (i.e. Queen and Three workers), and QF (i.e. Queen and Five workers). group codes were changed to subsocial, eusocial (3W), and eusocial (5W), respectively, for the manuscript.

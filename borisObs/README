@@ -8,3 +8,8 @@ We have to manually download each project file from BORIS. Each project is a sin
 6) Save file as nest name eg. "QF01" as a .csv file in the BORISfiles directory 
 *Note: all state events must be paired to export as an aggregated file 
 *Note: these files do not include observations that did not contain scored behaviors and do not include bees with no observed behaviors 
+
+Videos are named in the format "camera / nestID / YYYYMMDD / HH", where camera is either "for" (foraging/food collection chambers) or "nest"
+ (interior of nest)
+ 
+Nests were originally coded as QA (i.e. Queen Alone), QT (i.e. Queen and Three workers), and QF (i.e. Queen and Five workers). group codes were changed to subsocial, eusocial (3W), and eusocial (5W), respectively, for the manuscript.

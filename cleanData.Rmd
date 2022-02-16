@@ -1,0 +1,2010 @@
+---
+title: "CleanData"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+    code_folding: "hide"
+---
+
+275
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Load Packages
+```{r}
+library(tidyverse)# piping, subset and filtering
+library(plyr)
+library(ggplot2)  # graphs
+library(vegan)    # shannon diversity function
+library(ggpubr)
+library(dplyr)    # subset, summarize, and filter
+library(lme4)
+library(MuMIn)
+library(sjPlot)
+library(multcomp)
+```
+
+#.
+
+# Load Raw Data
+THIS ASSUMES YOUR DEFAULT WORKING DIRECTORY IS WHERE THIS DOCUMENT LIVES
+
+We have to manually download each project file from Boris. Each project is a single aggregated data file and represents one nest (ex. QF01). To download Boris files into a directory for data cleaning, do the following:
+1) Open project file in BORIS
+2) Observations -> Export Events -> Aggregated events
+3) Press select all and then ok 
+4) Select all subjects then all behaviors, press ok 
+5) Group selected events into one file 
+6) Save file as nest name eg. "QF01" as a .csv file in the BORISfiles directory 
+*Note: all state events must be paired to export as an aggregated file 
+*Note: these files do not include observations that did not contain scored behaviors and do not include bees with no observed behaviors 
+
+To download information about all videos watched (including those without any observed behaviors), we have to download an additional file for each project from Boris. To do this:
+1) Open project file in BORIS
+2) Analysis -> Synthetic time budget
+3) Press select all and then ok
+4) Press ok
+5) Save file as nest name eg. "QF01" as a .csv file in the allBORISfiles directory
+6) Click okay without selecting any additional behaviors to subtract from total time
+
+Videos are named in the format "camera / nestID / YYYYMMDD / HH", where camera is either "for" (foraging/food collection chambers) or "nest"
+ (interior of nest)
+ 
+Nests were originally coded as QA (i.e. Queen Alone), QT (i.e. Queen and Three workers), and QF (i.e. Queen and Five workers). group codes were changed to subsocial, eusocial (3W), and eusocial (5W), respectively, for the manuscript.
+
+## obs_data
+import the BORIS observation datafiles and combine them into a single df called obs_data. this contains all the behavioral observations
+```{r}
+# function to return list of filenames in BORISfiles folder
+# use full.names=TRUE so that it reads in files using absolute file path 
+getBORISfilenames <- function(gitfilepath) {
+  filenames <- list.files(gitfilepath,
+                          pattern = "*.csv",
+                          full.names = TRUE)
+  return(filenames)
+}
+
+# make the list of filenames
+BORISobsFilenames <- getBORISfilenames("../data/borisObs")
+BORISobsFilenames
+
+# loop over the files in the list and import all of them into a single dataframe. rename column names for clarity
+obs_data <- do.call(rbind, lapply(BORISobsFilenames, 
+                                    function(i) {
+                                      read.csv(i, header = TRUE,
+                                               col.names = c("obsID",
+                                                             "obsDate",
+                                                             "filename",
+                                                             "totalLen",
+                                                             "fps",
+                                                             "beeID",
+                                                             "behav", 
+                                                             "mod",
+                                                             "behavType",
+                                                             "start",
+                                                             "stop",
+                                                             "dur",
+                                                             "comStart",
+                                                             "comStop"))
+                     }
+))
+
+# remove unwanted columns that are not applicable to any analyses
+obs_data <- subset(obs_data, select = -c(filename, fps, behavType, mod, comStart, comStop))
+
+# look at the data
+obs_data
+
+# check the number of total observations (total number of unfiltered behaviors recorded)
+init_obs <- nrow(obs_data)
+print(paste("There are", init_obs, "observations in the initial obs_data dataframe.", sep = " "))
+```
+import BORIS synthetic time budget datasheets and merge them into a single df called videos_data
+```{r}
+# function to return list of filenames in BORISfiles folder
+# use full.names=TRUE so that it reads in files using absolute file path 
+getBORISfilenames <- function(gitfilepath) {
+  filenames <- list.files(gitfilepath,
+                          pattern = "*.csv",
+                          full.names = TRUE)
+  return(filenames)
+}
+
+# make the list of filenames
+BORISvideoFilenames <- getBORISfilenames("../data/borisTime")
+BORISvideoFilenames
+
+# loop over the files in the list and import all of them into a single dataframe. skip first 3 lines of column headers and only import first 2 columns (obsID and totLen)
+videos_data <- do.call(rbind, lapply(BORISvideoFilenames, 
+                                    function(i) {
+                                      read.csv(i, skip = 3, header = FALSE)[,1:2]
+                     }
+))
+
+# rename column headers to be descriptive
+names(videos_data)[1] <- "obsID"
+names(videos_data)[2] <- "totalLen"
+
+# look at the data
+videos_data
+
+# check how many total videos in unfiltered data we watched
+init_videos <- nrow(videos_data)
+print(paste("There are", init_videos, "videos in the initial videos_data dataframe.", sep = " "))
+```
+import the master datasheets and combine them into a single df called master_data. this data contains natal colony for each nest, which is used in analyses. 
+```{r}
+# do the same for the master datasheets that contain bee ID numbers
+getMasterfilenames <- function(gitfilepath) {
+  filenames <- list.files(gitfilepath,
+                          pattern = "*.csv",
+                          full.names = TRUE)
+  return(filenames)
+}
+
+# make the list of filenames
+masterfilenames <- getMasterfilenames("../data/masterBees")
+
+# loop over the files and import all of them. rename column names to remove "." and make shorter
+master_data <- do.call(rbind, lapply(masterfilenames, 
+                                    function(i) {
+                                      read.csv(i, 
+                                               header = FALSE, 
+                                               skip = 1,
+                                               na.strings=c("", " ", "NA", "na", "x", "X", "xp", "-", "#VALUE!", 
+                                                            "Died", "died", "died ", "died prior to freezing", "all died"),
+                                               col.names = c("nestID",
+                                                             "Qnatal",
+                                                             "Qpulled",
+                                                             "QID",
+                                                             "Gas1",
+                                                             "Gas2",
+                                                             "Wnatal", 
+                                                             "Wpulled",
+                                                             "WID1",
+                                                             "WID2",
+                                                             "WID3",
+                                                             "WID4",
+                                                             "WID5",
+                                                             "WIDrep1",
+                                                             "WIDrep2",
+                                                             "Eggs",
+                                                             "DaysToEggs",
+                                                             "LarvDate",
+                                                             "FreezeDate",
+                                                             "EggsToEclosion",
+                                                             "TotalNestTime",
+                                                             "Video1",
+                                                             "Video2",
+                                                             "Notes",
+                                                             "MadeBorisFile"))
+                     }
+))
+
+# look at the data
+master_data
+
+# check how many total, unfiltered nests there are
+init_master <- nrow(master_data)
+print(paste("There are", init_master, "nests accounted for in the initial master_data dataframe.", sep = " "))
+```
+## add size data
+
+import body size datasheets
+```{r}
+# size_data <- read.csv("../../../SarroFisher/SarroFisher/Data/rawData/bodysizeworkers.csv",
+#                       col.names = c("beeID", "nestID", "date", "wing1", "wing2", "size"), na.strings = "na")
+```
+
+# Clean Data
+
+## format data 
+split obsID column from obs_data and videos_data into its component parts to enable manipulation by camera/colony/time/date
+```{r}
+# convert columns to character to enable manipulation with strsplit() and subset(startsWith())
+obs_data$obsID <- as.character(obs_data$obsID)
+videos_data$obsID <- as.character(videos_data$obsID)
+
+# remove spaces in front of for or nest
+obs_data[startsWith(obs_data$obsID, " for"), 1] <- sub(".", "", obs_data[startsWith(obs_data$obsID, " for"), 1])
+videos_data[startsWith(videos_data$obsID, " for"), 1] <- sub(".", "", videos_data[startsWith(videos_data$obsID, " for"), 1])
+obs_data[startsWith(obs_data$obsID, " nest"), 1] <- sub(".", "", obs_data[startsWith(obs_data$obsID, " nest"), 1])
+videos_data[startsWith(videos_data$obsID, " nest"), 1] <- sub(".", "", videos_data[startsWith(videos_data$obsID, " nest"), 1])
+
+# add "non" to beginning of obsID for entries that are missing nest or for info
+for (i in 1:nrow(obs_data)){
+  if (startsWith(obs_data$obsID[i], "for") | startsWith(obs_data$obsID[i], "nest")) {}
+  else {
+    obs_data$obsID[i] <- paste("non", obs_data$obsID[i], sep = "\t")
+    }
+}
+for (i in 1:nrow(videos_data)){
+  if (startsWith(videos_data$obsID[i], "for") | startsWith(videos_data$obsID[i], "nest")) {}
+  else {
+    videos_data$obsID[i] <- paste("non", videos_data$obsID[i], sep = "\t")
+    }
+}
+
+# split out obsID into camID, nestID, dateID and hourID (split based on the tab (\t) between elements)
+# element 1 is camID
+obs_data$camID <- sapply(strsplit(obs_data$obsID, "\t"), 
+                          function(x){
+                            x[1]
+                            } )
+videos_data$camID <- sapply(strsplit(videos_data$obsID, "\t"), 
+                          function(x){
+                            x[1]
+                            } )
+# element 2 is nestID
+obs_data$nestID <- sapply(strsplit(obs_data$obsID, "\t"), 
+                          function(x){
+                            x[2]
+                            } )
+videos_data$nestID <- sapply(strsplit(videos_data$obsID, "\t"), 
+                          function(x){
+                            x[2]
+                            } )
+# element 3 is dateID
+obs_data$dateID <- sapply(strsplit(obs_data$obsID, "\t"), 
+                          function(x){ 
+                            x[3]
+                            } )
+videos_data$dateID <- sapply(strsplit(videos_data$obsID, "\t"), 
+                          function(x){ 
+                            x[3]
+                            } )
+# element 4 is hourID
+obs_data$hourID <- sapply(strsplit(obs_data$obsID, "\t"), 
+                          function(x){ 
+                            x[4]
+                            } )
+videos_data$hourID <- sapply(strsplit(videos_data$obsID, "\t"), 
+                          function(x){ 
+                            x[4]
+                            } )
+```
+## remove bad data
+remove nests that died or otherwise are unusable
+subset data to only include nests and behaviors of interest for analyses
+```{r}
+# remove unusable nests from master_data first, then subset other dataframes to include only those nests we want to keep
+
+# make nestID character to enable startsWith 
+master_data$nestID <- as.character(master_data$nestID)
+
+# remove queenless groups
+master_data <- master_data[!startsWith(master_data$nestID, "N"),]
+
+# remove colonies that were not frozen from master_data (these colonies died before males eclosed)
+master_data <- master_data[!is.na(master_data$FreezeDate),]
+
+# remove QF01 (it was frozen and males eclosed, but all adults died)
+master_data <- master_data[!master_data$nestID == "QF01",]
+
+# remove QF08 (missing workers)
+master_data <- master_data[!master_data$nestID == "QF08",]
+
+# remove QT07 (queen died)
+master_data <- master_data[!master_data$nestID == "QT07",]
+
+# remove QT15 (no nest video)
+master_data <- master_data[!master_data$nestID == "QT15",]
+
+# remove QA07 (no  video)
+master_data <- master_data[!master_data$nestID == "QA07",]
+
+# subset observations and videos to only include the filtered nests
+obs_data <- subset(obs_data, nestID %in% master_data$nestID)
+videos_data <- subset(videos_data, nestID %in% master_data$nestID)
+
+# subset observations to include only the behaviors we're interested in
+obs_data <- obs_data[(obs_data$behav == "feedsbrood" | 
+                        obs_data$behav == "nectarforaging" | 
+                        obs_data$behav == "pollenforaging" | 
+                        obs_data$behav == "incubate" | 
+                        obs_data$behav == "broodmanipulate") ,]
+
+# check how many remaining observations we have after filtering
+clean_obs <- nrow(obs_data)
+clean_videos <- nrow(videos_data)
+clean_master <- nrow(master_data)
+print(paste("There are", clean_obs, "out of", init_obs, "remaining observations in the cleaned obs_data", sep = " "))
+print(paste("There are", clean_videos, "out of", init_videos, "remaining observations in cleaned videos_data", sep = " "))
+print(paste("There are", clean_master, "out of", init_master, "remaining nests in cleaned master_data", sep = " ")) 
+
+# check how many nests are contained in each dataframe (they should be equal!)
+if(length(unique(master_data$nestID)) == length(unique(obs_data$nestID)) && length(unique(master_data$nestID)) == length(unique(videos_data$nestID))) {
+  print("All nests are accounted for in the video, obs, and master dataframes!")
+} else { print("Some nests are not accounted for in one or more of the video, obs, or master dataframes") }
+
+obs_data
+obs_data$nestID <- as.character(obs_data$nestID)
+
+# pull out nestTYPE as a separate column
+obs_data$nestTYPE <- substr(obs_data$nestID, start = 1, stop = 2)
+videos_data$nestTYPE <- substr(videos_data$nestID, start = 1, stop = 2)
+master_data$nestTYPE <- substr(master_data$nestID, start = 1, stop = 2)
+
+# make beeID queen or worker (no individual identifiers needed, this will group all worker behaviors from a single nest together)
+# all QA observations are from a Queen
+obs_data$beeID[obs_data$nestTYPE == "QA"] <- "Queen"
+# set remaining unknown bees as workers to be conservative
+obs_data$beeID[obs_data$beeID == "No focal subject"] <- "Worker"
+obs_data$beeID[obs_data$beeID == "Unknown"] <- "Worker"
+# remove any numbers after the Queen or Worker category
+obs_data$beeID <- sapply(strsplit(obs_data$beeID, " "), 
+                          function(x){ 
+                            x[1]
+                            } )
+obs_data$beeID[obs_data$beeID == "Unknown"] <- "Worker"
+
+# save cleaned master data sheet for nest dissection analyses
+write.csv(master_data, "../data/cleanMasterData.csv")
+unique(master_data$nestID)
+unique(obs_data$nestID)
+```
+
+## clean up observations
+remove foraging events less than 10 seconds long (eg. poop trips) and remove nest video data after first 5 minutes (errors)
+```{r}
+# remove NA rows
+orig <- obs_data
+obs_data <- obs_data[!is.na(obs_data$obsID),]
+
+# remove incubation and broodmanipulation events from workers (we only consistently recorded queens for these behaviors)
+obs_data <- obs_data[!(obs_data$behav == "incubate" & obs_data$beeID == "Worker"),]
+obs_data <- obs_data[!(obs_data$behav == "broodmanipulate" & obs_data$beeID == "Worker"),]
+
+# remove all nectar foraging events under 10 seconds long
+beforeNectRemov <- nrow(obs_data)
+obs_data <- obs_data[!(obs_data$behav == "nectarforaging" & obs_data$dur < 10),]
+
+# remove all pollen foraging events under 10 seconds long
+beforePollRemov <- nrow(obs_data)
+obs_data <- obs_data[!(obs_data$behav == "pollenforaging" & obs_data$dur < 10),]
+
+# check how many foraging observations were removed that were under 10 seconds long
+NectPollRemov <- nrow(obs_data)
+print(paste(beforeNectRemov - beforePollRemov, "nectar foraging observations were removed because they were under 10 seconds long.", sep = " "))
+print(paste(beforePollRemov - NectPollRemov, "pollen foraging observations were removed because they were under 10 seconds long.", sep = " "))
+
+# remove all but the first five minutes of nest videos
+
+# make time variables numeric
+obs_data$start <- as.numeric(obs_data$start)
+obs_data$stop <- as.numeric(obs_data$stop)
+obs_data$totalLen <- as.numeric(obs_data$totalLen)
+videos_data$totalLen <- as.numeric(videos_data$totalLen)
+
+# remove nest behaviors that start after 5 minute mark
+obs_data <- obs_data[!(obs_data$camID == "nest" & obs_data$start > 300),]
+
+# check how many were removed that started after 5 minutes
+fiveMinRemov_obs <- nrow(obs_data)
+print(paste(NectPollRemov - fiveMinRemov_obs, "nest observations were removed because they started after the five minute mark.", sep = " "))
+
+# cut down nest videos to only look at first 5 minutes (300 seconds), and make all behaviors stop by 5 minutes
+for (i in 1:nrow(obs_data)) {                                             # for every row in the dataframe
+  if ((obs_data$camID[i] == "nest") && (obs_data$totalLen[i] > 300)) {    # if it's a nest video and it is over 300 seconds long
+    obs_data$totalLen[i] <- 300                                           # make the total length of the video 300 seconds (5 minutes)
+    if (obs_data$stop[i] > 300) {                                         # of those nest videos, if a behavior ends past 300 seconds
+      obs_data$stop[i] <- 300                                             # set the stop time to 300 seconds
+      obs_data$dur[i] <- obs_data$stop[i] - obs_data$start[i]             # and recalculate the duration of that behavior to end at 300s
+    }
+  }
+}
+
+for (i in 1:nrow(videos_data)) {                                             # for every row in the dataframe
+  if ((videos_data$camID[i] == "nest") & (videos_data$totalLen[i] > 300)) {  # if it's a nest video and it is over 300 seconds long
+    videos_data$totalLen[i] <- 300                                           # make the total length of the video 300 seconds (5 minutes)
+  }
+}
+
+# # make duration of all brood feeding events 10 seconds duration to enable duration comparisons
+# for (i in 1:nrow(obs_data)) {
+#   if (!is.na(obs_data$behav[i]) && obs_data$behav[i] == "feedsbrood") {
+#     obs_data$dur[i] <- 10
+#   }
+# }
+
+# check how many observations remain after all cleaning has been completed
+clean_obs <- nrow(obs_data)
+clean_videos <- nrow(videos_data)
+print(paste("There are now", clean_obs, "observations remaining in the fully cleaned obs_data.", init_obs - clean_obs, "observations fewer than the initial observations, because", beforeNectRemov - beforePollRemov + beforePollRemov - NectPollRemov + NectPollRemov - fiveMinRemov_obs, "were removed above.",  sep = " "))
+print(paste("There are now", clean_videos, "out of", init_videos, "remaining videos in fully cleaned videos_data", sep = " "))
+```
+
+## add natal colony & brood number to obs_data
+```{r}
+# add natal colony info from master_data to obs_data
+
+# obs_data$Wnatal <- NA
+obs_data$Qnatal <- NA
+
+for (i in 1:nrow(obs_data)) {
+  for (j in 1:nrow(master_data)) {
+    if (obs_data$nestID[i] == master_data$nestID[j]) {
+      # obs_data$Wnatal[i] <- master_data$Wnatal[j]
+      obs_data$Qnatal[i] <- master_data$Qnatal[j]
+    }
+  }
+}
+
+# add brood number (number of pupae + eclosed adults)
+nest_data <- read.csv("../data/NestDissections.csv", header = TRUE, na.strings = c("na", "NA", "n/a", "N/A"))
+nest_data$brood <- nest_data$pupae + nest_data$males
+obs_data$brood <- NA
+for (i in 1:nrow(obs_data)) {
+  for (j in 1:nrow(nest_data)) {
+    if (obs_data$nestID[i] == nest_data$nestID[j]) {
+      obs_data$brood[i] <- nest_data$brood[j]
+    }
+  }
+}
+
+# add random number column to make table compatible with pivot_wider in future steps. needs a unique identifier for each individual
+obs_data$rand <- NA
+for (i in 1:(nrow(obs_data))) {
+  obs_data$rand[i] <- runif(1)
+}
+```
+
+
+#.
+
+# Visualize Data
+
+## total video watched per nest
+```{r}
+# select only the obsID, nestID, and totalLen columns
+# subset to only the unique combinations (ie. remove any duplicate videos so we don't count more time than we watched)
+nVids <- nrow(videos_data)
+totalLen_data <- videos_data %>%
+  dplyr::select(obsID, camID, nestID, nestTYPE, dateID, hourID, totalLen) %>%
+  unique()
+
+# print how many videos were removed
+print(paste("There were", nVids - nrow(totalLen_data), "duplicate videos removed.", sep = " "))
+
+# verify we have the correct number of colonies and videos
+print(paste("There are", nrow(totalLen_data), "videos out of", clean_videos, "fully cleaned videos accounted for in the totalLen_data dataframe."))
+
+# create empty dataframe to put length into
+camDur <- data.frame(nestID = NA,
+                     nestTYPE = NA,
+                     forLen = NA,
+                     nestLen = NA,
+                     totalLen = NA)
+
+# for each unique nest, subset the data to look at one nest at a time. then split out foraging and nest videos
+for (i in 1:length(unique(totalLen_data$nestID))) {
+  sub_data <- subset(totalLen_data, nestID == unique(totalLen_data$nestID)[i]) # subset to look at a single nest
+  for_data <- subset(sub_data, sub_data$camID == "for")                        # subset foraging video only into for_data
+  nest_data <- subset(sub_data, sub_data$camID == "nest")                      # subset nest video only into nest_data
+  forSum <- sum(for_data$totalLen)                                             # sum the video duration of all foraging videos
+  nestSum <- sum(nest_data$totalLen)                                           # sum the video duration of all nest videos
+  totalSum <- sum(sub_data$totalLen)                                           # sum the video duration of all videos
+  camDur <- rbind(camDur, c(sub_data$nestID[1], sub_data$nestTYPE[1], forSum, nestSum, totalSum))    # add the sum totals to the camDur df
+}
+
+# remove NA row initially created
+camDur <- camDur[2:nrow(camDur),]
+
+# count to make sure all colonies are accounted for
+print(paste("There are", nrow(camDur), "colonies accounted for in the camDur dataframe out of", nrow(master_data), "master colonies.", sep = " "))
+
+# make columns numeric 
+camDur$totalLen <- as.numeric(camDur$totalLen)
+camDur$forLen <- as.numeric(camDur$forLen)
+camDur$nestLen <- as.numeric(camDur$nestLen)
+camDur$nestID <- as.character(camDur$nestID)
+
+# ## make new column with the ratio of foraging to nest video length. should be ~12 for each colony. if it's not, need to watch more videos
+# camDur$FNratio <- NA
+# for (i in 1:nrow(camDur)) {
+#   camDur$FNratio[i] <- camDur$forLen[i] / camDur$nestLen[i]
+# }
+
+# check to see how much video was watched for each nest and for each treatment
+camDur <- camDur[order(camDur$nestID),]
+
+# graph total duration of video watched for each nestID
+
+sumsTYPE<-camDur %>% group_by(nestTYPE)
+ggplot(camDur, aes(x=nestID, y=forLen, fill = nestTYPE)) +
+  geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90)) + 
+  ggtitle("duration of foraging video watched for all filtered nests, regardless of video duration threshold")
+
+ggplot(camDur, aes(x=nestID, y=nestLen, fill = nestTYPE)) +
+  geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90)) + 
+  ggtitle("duration of nest video watched for all filtered nests, regardless of video duration threshold")
+
+# look at data based on each nestTYPE
+
+ggplot(sumsTYPE, aes(x=nestTYPE, y=forLen, fill = nestTYPE)) +
+  geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90)) + 
+  ggtitle("duration of foraging video watched for all filtered nests, regardless of video duration threshold")
+
+ggplot(sumsTYPE, aes(x=nestTYPE, y=nestLen, fill = nestTYPE)) +
+  geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90)) + 
+  ggtitle("duration of nest video watched for all filtered nests, regardless of video duration threshold")
+
+# print number of seconds and hours of video watched
+
+# summary of all videos
+allNestH <- sum(camDur$nestLen)/60/60
+allForH <- sum(camDur$forLen)/60/60
+allVideosH <- sum(camDur$totalLen)/60/60
+avgNestH <- mean(camDur$nestLen)/60/60
+semNestH <- sd(camDur$nestLen)/sqrt(length(camDur$nestLen))/60/60
+avgForH <- mean(camDur$forLen)/60/60
+semForH <- sd(camDur$forLen)/sqrt(length(camDur$forLen))/60/60
+avgTotalH <- mean(camDur$totalLen)/60/60
+semTotalH <- sd(camDur$totalLen)/sqrt(length(camDur$totalLen))/60/60
+
+# summary by nestTYPE
+avgQAnestH <- mean(camDur$nestLen[camDur$nestTYPE == "QA"])/60/60
+avgQFnestH <- mean(camDur$nestLen[camDur$nestTYPE == "QF"])/60/60
+avgQTnestH <- mean(camDur$nestLen[camDur$nestTYPE == "QT"])/60/60
+
+avgQAforH <- mean(camDur$forLen[camDur$nestTYPE == "NA"])/60/60
+avgQFforH <- mean(camDur$forLen[camDur$nestTYPE == "QF"])/60/60
+avgQTforH <- mean(camDur$forLen[camDur$nestTYPE == "QT"])/60/60
+
+# print summaries
+print(paste("We watched", round(allNestH, digits = 1), "hours of NEST videos overall, which is an average of", round(avgNestH, digits = 1), "hours per colony", sep = " "))
+print(paste("We watched", round(allForH, digits = 1), "hours of FORAGING videos overall, which is an average of", round(avgForH, digits = 1), "hours per colony", sep = " "))
+print(paste("We watched", round(allVideosH, digits = 1), "hours of ALL videos overall, which is an average of", round(avgTotalH, digits = 1), "hours per colony", sep = " "))
+
+print(paste("QA COLONIES: we watched an average of", round(avgQAnestH, digits = 1), "hours of NEST and", round(avgQAforH, digits = 1), "hours of FOR", sep = " "))
+print(paste("QF COLONIES: we watched an average of", round(avgQFnestH, digits = 1), "hours of NEST and", round(avgQFforH, digits = 1), "hours of FOR", sep = " "))
+print(paste("QT COLONIES: we watched an average of", round(avgQTnestH, digits = 1), "hours of NEST and", round(avgQTforH, digits = 1), "hours of FOR", sep = " "))
+
+# summary by nestID 
+for (i in 1:nrow(camDur)) {
+  print(paste(camDur$nestID[i], ": we watched a total of", round(camDur$nestLen[i]/60/60, digits = 1), "hours of NEST and", round(camDur$forLen[i]/60/60, digits = 1), "hours of FOR", sep = " "))
+}
+
+sumVideo <- camDur
+
+# meanFor <- mean(camDur$forLen)
+# semFor <- sd(camDur$forLen)/sqrt(length(camDur$forLen))
+# meanNest <- mean(camDur$nestLen)
+# semNest <- sd(camDur$nestLen)/sqrt(length(camDur$nestLen))               
+# meanTotal <- mean(camDur$totalLen)
+# semTotal <- sd(camDur$totalLen)/sqrt(length(camDur$totalLen))
+# 
+# meanFor/60/60
+# semFor/60/60
+# meanNest/60/60
+# semNest/60/60
+# meanTotal/60/60
+# semTotal
+```
+
+# Time Budget
+## calculate total duration of incubation and brood manipulation
+output df with each bee as a single row, behaviors as columns, total duration of each behavior per bee as values
+only incubation and brood manipulation were used as durations in analyses. remaining behaviors were counts
+```{r}
+# rename for clarity 
+dur_data <- obs_data
+
+# make brood feeding duration 10 seconds as a placeholder (this will not be used in analyses)
+for (i in 1:nrow(dur_data)) {
+  if (!is.na(dur_data$behav[i]) && dur_data$behav[i] == "feedsbrood") {
+    dur_data$dur[i] <- 10
+  }
+}
+
+# collapse dataframe so that columns = nestID, beeID, behav, and stop times for each behavior. 
+# values = duration of each behav
+dur_data <- dur_data %>%
+  pivot_wider(id_cols = c("nestID", "beeID", "brood", "Qnatal", "behav", "nestTYPE"), 
+              names_from = rand, 
+              values_from = dur, 
+              names_repair = "minimal")
+
+# add column with the sum of durations for all behaviors
+dur_data$totDur <- rowSums(dur_data[7:ncol(dur_data)], na.rm = TRUE)
+
+# subset dataframe to remove superfluous data
+dur_data <- dur_data[, c("nestID", "beeID", "brood", "Qnatal", "behav", "nestTYPE", "totDur")]
+
+# collapse dataframe so that each bee has one single row for each camera. cols = nestID, beeID, incubate, broodmanipulate , *other behaviors
+dur_data <- dur_data %>%
+  pivot_wider(id_cols = c("nestID", "beeID", "brood", "Qnatal", "nestTYPE"), 
+              names_from = behav, 
+              values_from = totDur)
+
+# save dataframe as .csv so it can be used in other downstream analyses 
+write.csv(dur_data, "../data/dur_data.csv")
+
+dur_data
+
+# ##graph the duration of behaviors we have per nest
+# Queencharacter <- sapply(strsplit(dur_data$nestID, ""), 
+#                           function(x){
+#                             x[1]
+#                           })
+# Numbercharacter<-sapply(strsplit(dur_data$nestID, ""),
+#                         function(x){
+#                           x[2]
+#                         })    
+#                           
+# dur_data$nestTYPE<-paste0(Queencharacter, Numbercharacter)
+# 
+# data_sum <- dur_data[, c("nestID", "nestTYPE", "beeID", "brood", "nectarforaging", "pollenforaging", "feedsbrood", "incubate", "broodmanipulate")] %>% arrange(nestID)
+# 
+# sumsTYPE<-data_sum %>% group_by(nestTYPE, beeID) 
+# 
+# # order nestTYPE
+# sumsTYPE$nestTYPE <- ordered(sumsTYPE$nestTYPE, levels = c("QA", "QT", "QF"))
+# data_sum$nestTYPE <- ordered(data_sum$nestTYPE, levels = c("QA", "QT", "QF"))
+
+# look at data we have so far based on each colony 
+
+# ggplot(data_sum, aes(x=nestID, y=feedsbrood, fill=beeID)) +
+#   geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90))
+# 
+# ggplot(data_sum, aes(x=nestID, y=nectarforaging, fill=beeID)) +
+#   geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90))
+# 
+# ggplot(data_sum, aes(x=nestID, y=pollenforaging, fill=beeID)) +
+#   geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90))
+# 
+# ggplot(data_sum, aes(x=nestID, y=incubate, fill=nestTYPE)) +
+#   geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90))
+# 
+# ggplot(data_sum, aes(x=nestID, y=broodmanipulate, fill=nestTYPE)) +
+#   geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90))
+# 
+# ## look at data we have so far based on each type of colony 
+# ggplot(sumsTYPE, aes(x=nestTYPE, y=feedsbrood, fill=beeID)) +
+#   geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90))
+# 
+# ggplot(sumsTYPE, aes(x=nestTYPE, y=nectarforaging, fill=beeID)) +
+#   geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90))
+# 
+# ggplot(sumsTYPE, aes(x=nestTYPE, y=pollenforaging, fill=beeID)) +
+#   geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90))
+# 
+# ggplot(sumsTYPE, aes(x=nestTYPE, y=incubate, fill=nestTYPE)) +
+#   geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90))
+# 
+# ggplot(sumsTYPE, aes(x=nestTYPE, y=broodmanipulate, fill=nestTYPE)) +
+#   geom_bar(stat="identity")+theme(axis.text.x=element_text(angle=90))
+```
+
+# Counts
+## count # of each behavior
+only brood feeding, nectar foraging, and pollen foraging were used as counts in analyses. remaining behaviors were durations
+```{r}
+count_data <- obs_data
+
+# make each observation a single count
+count_data$count <- 1
+
+# collapse dataframe so that columns = nestID, beeID, behav, and stop times for each behavior. 
+# values = duration of each behav
+count_data <- count_data %>%
+  pivot_wider(id_cols = c("nestID", "beeID", "brood", "Qnatal", "behav", "nestTYPE"), 
+              names_from = rand, 
+              values_from = count, 
+              names_repair = "minimal")
+
+# add column with the sum of durations for each behav
+count_data$count <- rowSums(count_data[7:ncol(count_data)], na.rm = TRUE)
+
+# subset dataframe so that all is left is nestID, beeID, behav, and count
+count_data <- count_data[, c("nestID", "beeID", "brood", "Qnatal", "behav", "nestTYPE", "count")]
+
+# collapse dataframe so that each bee has one single row for each camera. cols = nestID, beeID, nectarforaging, *other behaviors
+count_data <- count_data %>%
+  pivot_wider(id_cols = c("nestID", "beeID", "brood", "Qnatal", "nestTYPE"), 
+              names_from = behav, 
+              values_from = count)
+
+count_data
+```
+
+# Merge time budget & counts
+use incubation and broodmanipulate from durations, brood feeding, nectar foraging, and pollen foraging from counts
+```{r}
+dur_data1 <- dur_data[, c("nestID", "beeID", "brood", "Qnatal", "nestTYPE", "incubate", "broodmanipulate")]
+count_data1 <- count_data[, c("nestID", "beeID", "feedsbrood", "nectarforaging", "pollenforaging")]
+
+unscaled_data <- join(dur_data1, count_data1, by = c("nestID", "beeID"))
+
+# make NA 0
+unscaled_data[is.na(unscaled_data)] <- 0
+```
+
+## combine worker and queens to enable filtering
+only include behaviors that were recorded >= 3 times within a nest in a given analysis
+this is to prevent biasing analyses from nests in which few behaviors were observed. we know all of these behaviors occured, because nests successfully developed, but we did not always observe infrequently performed behaivors
+```{r}
+# rename it prior to filtering
+filterable_data <- unscaled_data
+
+# set threshold # observations (or # seconds of observation)
+# behaviors that occur fewer than this many times at the nest level will not be included in analyses
+threshold <- 3
+
+############ incubation ##############
+
+# incubation was only recorded for queens
+
+# reformat df to look only at incubation
+filt_incubate <- filterable_data %>%
+  pivot_wider(id_cols = c("nestID"),
+              names_from = beeID,
+              values_from = incubate,
+              names_repair = "minimal")
+
+# look at distribution of incubation times per queen
+ggdensity(filt_incubate$Queen)
+
+ggplot(filt_incubate, aes(nestID, Queen)) +
+  geom_point()
+
+# remove data from queens who were not recorded incubating at least the threshold amount
+filt_incubate <- filt_incubate[filt_incubate$Queen >= threshold, ]
+
+############ brood manipulation ##############
+
+# brood manipulation was only recorded for queens
+
+# reormat df to look only at brood manipulation
+filt_manip <- filterable_data %>%
+  pivot_wider(id_cols = c("nestID"),
+              names_from = beeID,
+              values_from = broodmanipulate,
+              names_repair = "minimal")
+
+# look at distribution of brood manipulation times per queen
+ggdensity(filt_manip$Queen)
+
+ggplot(filt_manip, aes(nestID, Queen)) +
+  geom_point()
+
+# remove data from queens who were not recorded incubating at least the threshold amount
+filt_manip <- filt_manip[filt_manip$Queen >= threshold, ]
+
+############ brood feeding ##############
+
+# brood feeding was recorded for both queens and workers
+
+# reormat df to look only at brood feeding 
+filt_feed <- filterable_data %>%
+  pivot_wider(id_cols = c("nestID"),
+              names_from = beeID,
+              values_from = feedsbrood,
+              names_repair = "minimal")
+
+# add column to sum brood feeding events across both workers and queens in each nest
+filt_feed$total <- NA
+
+# sum queen + worker brood feeding events for each nest
+for (i in 1:nrow(filt_feed)) {
+  filt_feed$total[i] <- sum(filt_feed$Queen[i], filt_feed$Worker[i], na.rm = TRUE)
+}
+
+# look at distribution of brood feeding frequency per nest
+ggdensity(filt_feed$total)
+
+ggplot(filt_feed, aes(nestID, total)) +
+  geom_point() +
+  ggtitle("brood feeding")
+
+# remove data from nests where fewer than the threshold number of brood feeding events were observed
+filt_feed <- filt_feed[filt_feed$total >= threshold, ]
+
+############ nectar foraging ##############
+
+# nectar foraging was recorded for both queens and workers
+
+# reformat df to look only at nectar foraging
+filt_nectar <- filterable_data %>%
+  pivot_wider(id_cols = c("nestID"),
+              names_from = beeID,
+              values_from = nectarforaging,
+              names_repair = "minimal")
+
+# add column to sum nectar foraging events across both workers and queens in each nest
+filt_nectar$total <- NA
+
+# sum queen + worker nectar foraging events for each nest
+for (i in 1:nrow(filt_nectar)) {
+  filt_nectar$total[i] <- sum(filt_nectar$Queen[i], filt_nectar$Worker[i], na.rm = TRUE)
+}
+
+# look at distribution of nectar foraging frequency per nest
+ggdensity(filt_nectar$total)
+
+ggplot(filt_nectar, aes(nestID, total)) +
+  geom_point()
+
+# remove data from nests where fewer than the threshold number of nectar foraging events were observed
+filt_nectar <- filt_nectar[filt_nectar$total > threshold, ]
+
+
+############ pollen foraging ##############
+
+# pollen foraging was recorded for both queens and workers
+
+# reformat df to look only at pollen foraging
+filt_pollen <- filterable_data %>%
+  pivot_wider(id_cols = c("nestID"),
+              names_from = beeID,
+              values_from = pollenforaging,
+              names_repair = "minimal")
+
+# add column to sum pollen foraging eventsa cross both workers and queens in each nest
+filt_pollen$total <- NA
+
+# sum queen + worker pollen foraging events for each nest
+for (i in 1:nrow(filt_pollen)) {
+  filt_pollen$total[i] <- sum(filt_pollen$Queen[i], filt_pollen$Worker[i], na.rm = TRUE)
+}
+
+# look at distribution of pollen foraging frequency per nest
+ggdensity(filt_pollen$total)
+
+ggplot(filt_pollen, aes(nestID, total)) +
+  geom_point()
+
+# remove data from nests where fewer than the threshold number of pollen foraging events were observed
+filt_pollen <- filt_pollen[filt_pollen$total > threshold, ]
+```
+
+
+#.
+# SCALE TO VIDEO
+scaled to amount of video watched (not to brood)
+```{r}
+camDur
+unscaled_data
+
+# add camDur length to unscaled_data
+scaled_unfilt <- join(unscaled_data, camDur, by = "nestID")
+
+# scale the duration/frequency of each behavior to the total video time watched for that nest (scaled_unfilt)
+# multiply counts by 60*60 to make it # per hour
+scaled_unfilt$broodmanipulate <- scaled_unfilt$broodmanipulate / scaled_unfilt$nestLen
+scaled_unfilt$incubate <- scaled_unfilt$incubate / scaled_unfilt$nestLen
+scaled_unfilt$feedsbrood <- scaled_unfilt$feedsbrood / scaled_unfilt$nestLen * 60*60
+scaled_unfilt$nectarforaging <- scaled_unfilt$nectarforaging / scaled_unfilt$forLen * 60*60
+scaled_unfilt$pollenforaging <- scaled_unfilt$pollenforaging / scaled_unfilt$forLen * 60*60
+
+scaled_unfilt
+
+# make Inf times NA
+scaled_unfilt <- do.call(data.frame,
+                   lapply(scaled_unfilt,
+                          function(x) replace(x, is.infinite(x), NA)))
+```
+
+# remove filtered behaviors from data
+make data for a specific behavior NA in nests where that behavior was observed fewer than the threshold number of times
+```{r}
+# rename it to scaled_time to differentiate from scaled_brood (below)
+scaled_time <- scaled_unfilt
+
+# iterate through each row and make value NA if it was observed fewer than threshold number of times in that nest
+for (i in 1:nrow(scaled_time)) {
+  if(!scaled_time$nestID[i] %in% filt_nectar$nestID) {
+    scaled_time$nectarforaging[i] <- NA
+  }
+  if(!scaled_time$nestID[i] %in% filt_pollen$nestID) {
+    scaled_time$pollenforaging[i] <- NA
+  }
+  if(!scaled_time$nestID[i] %in% filt_feed$nestID) {
+    scaled_time$feedsbrood[i] <- NA
+  }
+  if(!scaled_time$nestID[i] %in% filt_manip$nestID) {
+    scaled_time$broodmanipulate[i] <- NA
+  }
+  if(!scaled_time$nestID[i] %in% filt_incubate$nestID) {
+    scaled_time$incubate[i] <- NA
+  }
+}
+
+# print sample sizes for each behavior
+paste(nrow(scaled_time[scaled_time$beeID == "Queen",]), "total nests")
+
+paste(nrow(scaled_time[(!is.na(scaled_time$pollenforaging) & (scaled_time$beeID == "Queen")),]), "nests included in pollen foraging analyses:",
+      nrow(scaled_time[(!is.na(scaled_time$pollenforaging)) & (scaled_time$nestTYPE == "QA") & (scaled_time$beeID == "Queen"),]), "QA nests",
+      nrow(scaled_time[(!is.na(scaled_time$pollenforaging)) & (scaled_time$nestTYPE == "QT") & (scaled_time$beeID == "Queen"),]), "QT nests",
+      nrow(scaled_time[(!is.na(scaled_time$pollenforaging)) & (scaled_time$nestTYPE == "QF") & (scaled_time$beeID == "Queen"),]), "QF nests")
+paste(nrow(scaled_time[!is.na(scaled_time$nectarforaging) & (scaled_time$beeID == "Queen"),]), "nests included in nectar foraging analyses:",
+      nrow(scaled_time[(!is.na(scaled_time$nectarforaging)) & (scaled_time$nestTYPE == "QA") & (scaled_time$beeID == "Queen"),]), "QA nests",
+      nrow(scaled_time[(!is.na(scaled_time$nectarforaging)) & (scaled_time$nestTYPE == "QT") & (scaled_time$beeID == "Queen"),]), "QT nests",
+      nrow(scaled_time[(!is.na(scaled_time$nectarforaging)) & (scaled_time$nestTYPE == "QF") & (scaled_time$beeID == "Queen"),]), "QF nests")
+paste(nrow(scaled_time[!is.na(scaled_time$feedsbrood) & (scaled_time$beeID == "Queen"),]), "nests included in brood feeding analyses:",
+      nrow(scaled_time[(!is.na(scaled_time$feedsbrood)) & (scaled_time$nestTYPE == "QA") & (scaled_time$beeID == "Queen"),]), "QA nests",
+      nrow(scaled_time[(!is.na(scaled_time$feedsbrood)) & (scaled_time$nestTYPE == "QT") & (scaled_time$beeID == "Queen"),]), "QT nests",
+      nrow(scaled_time[(!is.na(scaled_time$feedsbrood)) & (scaled_time$nestTYPE == "QF") & (scaled_time$beeID == "Queen"),]), "QF nests")
+paste(nrow(scaled_time[!is.na(scaled_time$incubate) & (scaled_time$beeID == "Queen"),]), "nests included in incubation analyses:",
+      nrow(scaled_time[(!is.na(scaled_time$incubate)) & (scaled_time$nestTYPE == "QA") & (scaled_time$beeID == "Queen"),]), "QA nests",
+      nrow(scaled_time[(!is.na(scaled_time$incubate)) & (scaled_time$nestTYPE == "QT") & (scaled_time$beeID == "Queen"),]), "QT nests",
+      nrow(scaled_time[(!is.na(scaled_time$incubate)) & (scaled_time$nestTYPE == "QF") & (scaled_time$beeID == "Queen"),]), "QF nests")
+paste(nrow(scaled_time[!is.na(scaled_time$broodmanipulate) & (scaled_time$beeID == "Queen"),]), "nests included in brood manipulation analyses:",
+      nrow(scaled_time[(!is.na(scaled_time$broodmanipulate)) & (scaled_time$nestTYPE == "QA") & (scaled_time$beeID == "Queen"),]), "QA nests",
+      nrow(scaled_time[(!is.na(scaled_time$broodmanipulate)) & (scaled_time$nestTYPE == "QT") & (scaled_time$beeID == "Queen"),]), "QT nests",
+      nrow(scaled_time[(!is.na(scaled_time$broodmanipulate)) & (scaled_time$nestTYPE == "QF") & (scaled_time$beeID == "Queen"),]), "QF nests")
+```
+
+### plot individual nest durations
+```{r}
+# look at data split out by each colony 
+
+# ############# without workers ###################
+# 
+# a <- ggplot(pollen_scaled[pollen_scaled$beeID == "Queen",], aes(x=nestID, y=pollenforaging, fill=Qnatal, color = nestTYPE)) +
+#   geom_bar(stat="identity") +
+#   scale_color_manual(values = c("white", "black", "white")) +
+#   theme(axis.text.x=element_text(angle=90))
+# 
+# b <- ggplot(nectar_scaled[nectar_scaled$beeID == "Queen",], aes(x=nestID, y=nectarforaging, fill=Qnatal, color = nestTYPE)) +
+#   geom_bar(stat="identity") +
+#   scale_color_manual(values = c("white", "black", "white")) +
+#   theme(axis.text.x=element_text(angle=90))
+# 
+# c <- ggplot(feed_scaled[feed_scaled$beeID == "Queen",], aes(x=nestID, y=feedsbrood, fill=Qnatal, color = nestTYPE)) +
+#   geom_bar(stat="identity") +
+#   scale_color_manual(values = c("white", "black", "white")) +
+#   theme(axis.text.x=element_text(angle=90))
+# 
+# d <- ggplot(incubate_scaled[incubate_scaled$beeID == "Queen",], aes(x=nestID, y=incubate, fill=Qnatal, color = nestTYPE)) +
+#   geom_bar(stat="identity") +
+#   scale_color_manual(values = c("white", "black", "white")) +
+#   theme(axis.text.x=element_text(angle=90))
+# 
+# e <- ggplot(manip_scaled[manip_scaled$beeID == "Queen",], aes(x=nestID, y=broodmanipulate, fill=Qnatal, color = nestTYPE)) +
+#   geom_bar(stat="identity") +
+#   scale_color_manual(values = c("white", "black", "white")) +
+#   theme(axis.text.x=element_text(angle=90))
+# 
+# a
+# b
+# c
+# d
+# e
+# 
+# ggarrange(a, b, c, d, e, common.legend = TRUE)
+
+
+############# with workers ###################
+
+# order nestIDs, beeID, and nestTYPE for graphing
+
+# nestIDs ordered manually based on frequency of brood feeding & brood manipulation behaviors
+scaled_time$nestID <- ordered(scaled_time$nestID, levels = c("QA10", "QA01", "QA09", "QA06", "QA03", "QA05", "QA02", "QA11", "QA12", "QA04",
+                                                             "QT02", "QT08", "QT12", "QT03", "QT11", "QT14", "QT01", "QT04", "QT13",
+                                                             "QF06", "QF04", "QF16", "QF12", "QF03", "QF10", "QF07", "QF14", "QF09", "QF11", "QF02", "QF15"))
+scaled_time$beeID <- ordered(scaled_time$beeID, levels = c("Worker", "Queen"))
+scaled_time$nestTYPE <- ordered(scaled_time$nestTYPE, levels = c("QA", "QT", "QF"))
+
+# order the beeID column to display queens in legend first
+scaled_time$beeID <- factor(scaled_time$beeID, levels = c("Worker", "Queen"))
+
+a <- ggplot(scaled_time, aes(x=nestID, y=pollenforaging, fill = interaction(beeID, nestTYPE))) +
+  geom_bar(stat="identity") +
+  scale_fill_manual(values = c("#440154FF", "grey", "#238A8DFF", "grey", "#FDE725FF"), 
+                    labels = c("Subsocial Queen", "Eusocial (3W) Worker", "Eusocial (3W) Queen", "Eusocial (5W) Worker", "Eusocial (5W) Queen")) +
+  theme(axis.text.x=element_text(angle=90, size = 5)) +
+  labs(x = "Pollen collection", 
+       y = "# per hour",
+       fill = "Social configuration & caste") +
+  guides(fill = guide_legend(nrow = 2)) +
+  scale_x_discrete(labels=c("1.QW0", "2.QW0", "3.QW0", "4.QW0", "5.QW0", "6.QW0", "7.QW0", "8.QW0", "9.QW0", "10.QW0",
+                            "1.QW3", "2.QW3", "3.QW3", "4.QW3", "5.QW3", "6.QW3", "7.QW3", "8.QW3", "9.QW3",
+                            "1.QW5", "2.QW5", "3.QW5", "4.QW5", "5.QW5", "6.QW5", "7.QW5", "8.QW5", "9.QW5", "10.QW5", "11.QW5", "12.QW5"))
+
+b <- ggplot(scaled_time, aes(x=nestID, y=nectarforaging, fill = interaction(beeID, nestTYPE))) +
+  geom_bar(stat="identity") +
+  scale_fill_manual(values = c("#440154FF", "grey", "#238A8DFF", "grey", "#FDE725FF"), 
+                    labels = c("Subsocial Queen", "Eusocial (3W) Worker", "Eusocial (3W) Queen", "Eusocial (5W) Worker", "Eusocial (5W) Queen")) +
+  theme(axis.text.x=element_text(angle=90, size = 5)) +
+  labs(x = "Nectar collection", 
+       y = "# per hour",
+       fill = "Social configuration & caste") +
+  guides(fill = guide_legend(nrow = 2)) +
+  scale_x_discrete(labels=c("1.QW0", "2.QW0", "3.QW0", "4.QW0", "5.QW0", "6.QW0", "7.QW0", "8.QW0", "9.QW0", "10.QW0",
+                            "1.QW3", "2.QW3", "3.QW3", "4.QW3", "5.QW3", "6.QW3", "7.QW3", "8.QW3", "9.QW3",
+                            "1.QW5", "2.QW5", "3.QW5", "4.QW5", "5.QW5", "6.QW5", "7.QW5", "8.QW5", "9.QW5", "10.QW5", "11.QW5", "12.QW5"))
+
+
+c <- ggplot(scaled_time, aes(x=nestID, y=feedsbrood, fill = interaction(beeID, nestTYPE))) +
+  geom_bar(stat="identity") +
+  scale_fill_manual(values = c("#440154FF", "grey", "#238A8DFF", "grey", "#FDE725FF"), 
+                    labels = c("Subsocial Queen", "Eusocial (3W) Worker", "Eusocial (3W) Queen", "Eusocial (5W) Worker", "Eusocial (5W) Queen")) +
+  theme(axis.text.x=element_text(angle=90, size = 5)) +
+  labs(x = "Brood feeding", 
+       y = "# per hour",
+       fill = "Social configuration & caste") +
+  guides(fill = guide_legend(nrow = 2)) +
+  scale_x_discrete(labels=c("1.QW0", "2.QW0", "3.QW0", "4.QW0", "5.QW0", "6.QW0", "7.QW0", "8.QW0", "9.QW0", "10.QW0",
+                            "1.QW3", "2.QW3", "3.QW3", "4.QW3", "5.QW3", "6.QW3", "7.QW3", "8.QW3", "9.QW3",
+                            "1.QW5", "2.QW5", "3.QW5", "4.QW5", "5.QW5", "6.QW5", "7.QW5", "8.QW5", "9.QW5", "10.QW5", "11.QW5", "12.QW5"))
+
+d <- ggplot(scaled_time, aes(x=nestID, y=incubate, fill = interaction(beeID, nestTYPE))) +
+  geom_bar(stat="identity") +
+  scale_fill_manual(values = c("#440154FF", "grey", "#238A8DFF", "grey", "#FDE725FF"), 
+                    labels = c("Subsocial Queen", "Eusocial (3W) Worker", "Eusocial (3W) Queen", "Eusocial (5W) Worker", "Eusocial (5W) Queen")) +
+  theme(axis.text.x=element_text(angle=90, size = 5)) +
+  labs(x = "Incubation", 
+       y = "Proportion of time",
+       fill = "Social configuration & caste") +
+  guides(fill = guide_legend(nrow = 2)) +
+  scale_x_discrete(labels=c("1.QW0", "2.QW0", "3.QW0", "4.QW0", "5.QW0", "6.QW0", "7.QW0", "8.QW0", "9.QW0", "10.QW0",
+                            "1.QW3", "2.QW3", "3.QW3", "4.QW3", "5.QW3", "6.QW3", "7.QW3", "8.QW3", "9.QW3",
+                            "1.QW5", "2.QW5", "3.QW5", "4.QW5", "5.QW5", "6.QW5", "7.QW5", "8.QW5", "9.QW5", "10.QW5", "11.QW5", "12.QW5"))
+
+e <- ggplot(scaled_time, aes(x=nestID, y=broodmanipulate, fill = interaction(beeID, nestTYPE))) +
+  geom_bar(stat="identity") +
+  scale_fill_manual(values = c("#440154FF", "grey", "#238A8DFF", "grey", "#FDE725FF"), 
+                    labels = c("Subsocial Queen", "Eusocial (3W) Worker", "Eusocial (3W) Queen", "Eusocial (5W) Worker", "Eusocial (5W) Queen")) +
+  theme(axis.text.x=element_text(angle=90, size = 5)) +
+  labs(x = "Brood manipulation", 
+       y = "Proportion of time",
+       fill = "Social configuration & caste") +
+  guides(fill = guide_legend(nrow = 2)) +
+  scale_x_discrete(labels=c("1.QW0", "2.QW0", "3.QW0", "4.QW0", "5.QW0", "6.QW0", "7.QW0", "8.QW0", "9.QW0", "10.QW0",
+                            "1.QW3", "2.QW3", "3.QW3", "4.QW3", "5.QW3", "6.QW3", "7.QW3", "8.QW3", "9.QW3",
+                            "1.QW5", "2.QW5", "3.QW5", "4.QW5", "5.QW5", "6.QW5", "7.QW5", "8.QW5", "9.QW5", "10.QW5", "11.QW5", "12.QW5"))
+
+a
+b
+c
+d
+e
+ggarrange(a, b, c, d, e, common.legend = TRUE)
+ggsave("../figures/timeWorkersIndividual.jpg")
+```
+
+### plot social group queens 
+proportion of total time spent on each behavior
+```{r}
+# look only at queens
+queen_time <- scaled_time[scaled_time$beeID == "Queen",]
+
+# gather behaviors into a single column to graph
+queen_time <- queen_time %>% gather(feedsbrood, nectarforaging, pollenforaging, broodmanipulate, incubate, key = "behav", value = "time")
+
+# summarize the data and calculate mean, sd, sem per social configuration
+dfSumm <- ddply(queen_time, 
+                c("behav", "nestTYPE"), 
+                summarise,
+                mean = mean(time, na.rm = TRUE), 
+                sd = sd(time, na.rm = TRUE),
+                sem = sd(time, na.rm = TRUE)/sqrt(length(time)))
+dfSumm$behav <- ordered(dfSumm$behav, levels = c("nectarforaging", "pollenforaging", "feedsbrood", "broodmanipulate", "incubate"))
+dfSumm
+
+# # plot the summarized data in a barplot with error bars equal to sem
+# ggplot(dfSumm, aes(x = behav, 
+#                    y = mean, 
+#                    fill = nestTYPE,
+#                    ymin = mean - sem,
+#                    ymax = mean + sem)) + 
+#   geom_bar(position = position_dodge(),
+#            stat="identity",
+#            width = 0.5) +
+#   geom_errorbar(position = position_dodge(0.5), 
+#                 width = 0.1) +
+#   theme(text = element_text(size = 20)) +
+#   theme(axis.text.x = element_text(angle = 90)) +
+#   theme(legend.position = "top") +
+#   labs(x = "behavior", 
+#        y = "percent time")
+# ggsave("bar.jpeg", path = "../figures")
+
+# plot each one on own axis for clarity
+
+pollen <- ggplot(dfSumm[dfSumm$behav == "pollenforaging",], aes(x = behav, 
+                   y = mean, 
+                   fill = nestTYPE,
+                   ymin = mean - sem,
+                   ymax = mean + sem)) + 
+  geom_bar(position = position_dodge(),
+           stat="identity",
+           width = 0.5) +
+  geom_errorbar(position = position_dodge(0.5), 
+                width = 0.1) +
+  theme(text = element_text(size = 15),
+        legend.position = "top") +
+  scale_x_discrete(labels = c("Pollen collection")) +
+  scale_fill_manual(values = c("#440154FF", "#238A8DFF", "#FDE725FF"), 
+                    labels = c("Subsocial", "Eusocial (3W)", "Eusocial (5W)")) +  
+  labs(x = "", 
+       y = "# per hour",
+       fill = "Social configuration")
+
+nectar <- ggplot(dfSumm[dfSumm$behav == "nectarforaging",], aes(x = behav, 
+                   y = mean, 
+                   fill = nestTYPE,
+                   ymin = mean - sem,
+                   ymax = mean + sem)) + 
+  geom_bar(position = position_dodge(),
+           stat="identity",
+           width = 0.5) +
+  geom_errorbar(position = position_dodge(0.5), 
+                width = 0.1) +
+  theme(text = element_text(size = 15),
+        legend.position = "top") +
+  scale_x_discrete(labels = c("Nectar collection")) +
+  scale_fill_manual(values = c("#440154FF", "#238A8DFF", "#FDE725FF"), 
+                    labels = c("Subsocial", "Eusocial (3W)", "Eusocial (5W)")) +  
+  labs(x = "", 
+       y = "# per hour",
+       fill = "Social configuration")
+
+feed <- ggplot(dfSumm[dfSumm$behav == "feedsbrood",], aes(x = behav, 
+                   y = mean, 
+                   fill = nestTYPE,
+                   ymin = mean - sem,
+                   ymax = mean + sem)) + 
+  geom_bar(position = position_dodge(),
+           stat="identity",
+           width = 0.5) +
+  geom_errorbar(position = position_dodge(0.5), 
+                width = 0.1) +
+  theme(text = element_text(size = 15),
+        legend.position = "top") +
+  scale_x_discrete(labels = c("Brood feeding")) +
+  scale_fill_manual(values = c("#440154FF", "#238A8DFF", "#FDE725FF"), 
+                    labels = c("Subsocial", "Eusocial (3W)", "Eusocial (5W)")) +  
+  labs(x = "", 
+       y = "# per hour",
+       fill = "Social configuration")
+
+incubate <- ggplot(dfSumm[dfSumm$behav == "incubate",], aes(x = behav, 
+                   y = mean, 
+                   fill = nestTYPE,
+                   ymin = mean - sem,
+                   ymax = mean + sem)) + 
+  geom_bar(position = position_dodge(),
+           stat="identity",
+           width = 0.5) +
+  geom_errorbar(position = position_dodge(0.5), 
+                width = 0.1) +
+  theme(text = element_text(size = 15),
+        legend.position = "top") +
+  scale_x_discrete(labels = c("Incubation")) +
+  scale_fill_manual(values = c("#440154FF", "#238A8DFF", "#FDE725FF"), 
+                    labels = c("Subsocial", "Eusocial (3W)", "Eusocial (5W)")) +  
+  labs(x = "", 
+       y = "Proportion of time",
+       fill = "Social configuration")
+
+manip <- ggplot(dfSumm[dfSumm$behav == "broodmanipulate",], aes(x = behav, 
+                   y = mean, 
+                   fill = nestTYPE,
+                   ymin = mean - sem,
+                   ymax = mean + sem)) + 
+  geom_bar(position = position_dodge(),
+           stat="identity",
+           width = 0.5) +
+  geom_errorbar(position = position_dodge(0.5), 
+                width = 0.1) +
+  theme(text = element_text(size = 15),
+        legend.position = "top") +
+  scale_x_discrete(labels = c("Brood manipulation")) +
+  scale_fill_manual(values = c("#440154FF", "#238A8DFF", "#FDE725FF"), 
+                    labels = c("Subsocial", "Eusocial (3W)", "Eusocial (5W)")) +  
+  labs(x = "", 
+       y = "Proportion of time",
+       fill = "Social configuration")
+
+ggarrange(pollen, nectar, feed, incubate, manip, common.legend = TRUE)
+ggsave("../figures/timeQueen.pdf")
+```
+### plot social group queens + workers
+```{r}
+# allTime <- scaled_time %>% gather(feedsbrood, nectarforaging, pollenforaging, broodmanipulate, incubate, key = "behav", value = "time")
+# 
+# allTime$nestTYPE <- ordered(allTime$nestTYPE, levels = c("QA", "QT", "QF"))
+# allTime$beeID <- ordered(allTime$beeID, levels = c("Worker", "Queen"))
+# 
+# ## summarize the data and calculate mean, sd, sem
+# dfSumm <- ddply(allTime, 
+#                 c("behav", "beeID", "nestTYPE"), 
+#                 summarise,
+#                 mean = mean(time, na.rm = TRUE), 
+#                 sd = sd(time, na.rm = TRUE),
+#                 sem = sd(time, na.rm = TRUE)/sqrt(length(time)))
+# dfSumm$behav <- ordered(dfSumm$behav, levels = c("nectarforaging", "pollenforaging", "feedsbrood", "broodmanipulate", "incubate"))
+# dfSumm$nestTYPE <- ordered(dfSumm$nestTYPE, levels = c("QA", "QT", "QF"))
+# dfSumm$beeID <- ordered(dfSumm$beeID, levels = c("Worker", "Queen"))
+# dfSumm
+# 
+# # ## plot the summarized data in a barplot with error bars equal to sem
+# # ## important that error bar position_dodge = geom_bar width to center error bars on the graph
+# # ggplot(dfSumm, aes(x = behav, 
+# #                    y = mean, 
+# #                    fill = nestTYPE,
+# #                    ymin = mean - sem,
+# #                    ymax = mean + sem)) + 
+# #   geom_bar(position = position_dodge(),
+# #            stat="identity",
+# #            width = 0.5) +
+# #   geom_errorbar(position = position_dodge(0.5), 
+# #                 width = 0.1) +
+# #   theme(text = element_text(size = 20)) +
+# #   theme(axis.text.x = element_text(angle = 90)) +
+# #   theme(legend.position = "top") +
+# #   labs(x = "behavior", 
+# #        y = "percent time")
+# # ggsave("bar.jpeg", path = "../figures")
+# 
+# # plot each one on own axis for clarity
+# pollen <- ggplot(dfSumm[dfSumm$behav == "pollenforaging",], aes(x = nestTYPE, 
+#                    y = mean, 
+#                    fill = interaction(beeID, nestTYPE),
+#                    ymin = mean - sem,
+#                    ymax = mean + sem)) + 
+#   geom_bar(stat="identity", width = 0.5) +
+#   scale_fill_manual(values = c("#440154FF", "grey", "#1F968BFF", "grey", "#FDE725FF")) +
+#   geom_errorbar(stat="identity", width = 0.1) +
+#   theme(text = element_text(size = 15)) +
+#   theme(legend.position = "top") +
+#   labs(x = "pollenforaging", 
+#        y = "# per hour")
+# 
+# nectar <- ggplot(dfSumm[dfSumm$behav == "nectarforaging",], aes(x = nestTYPE, 
+#                    y = mean, 
+#                    fill = interaction(beeID, nestTYPE),
+#                    ymin = mean - sem,
+#                    ymax = mean + sem)) + 
+#   geom_bar(stat="identity", width = 0.5) +
+#   scale_fill_manual(values = c("#440154FF", "grey", "#1F968BFF", "grey", "#FDE725FF")) +
+#   geom_errorbar(stat="identity", width = 0.1) +
+#   theme(text = element_text(size = 15)) +
+#   theme(legend.position = "top") +
+#   labs(x = "nectarforaging", 
+#        y = "# per hour")
+# 
+# feed <- ggplot(dfSumm[dfSumm$behav == "feedsbrood",], aes(x = nestTYPE, 
+#                    y = mean, 
+#                    fill = interaction(beeID, nestTYPE),
+#                    ymin = mean - sem,
+#                    ymax = mean + sem)) + 
+#   geom_bar(stat="identity", width = 0.5) +
+#   scale_fill_manual(values = c("#440154FF", "grey", "#1F968BFF", "grey", "#FDE725FF")) +
+#   geom_errorbar(stat="identity", width = 0.1) +
+#   theme(text = element_text(size = 15)) +
+#   theme(legend.position = "top") +
+#   labs(x = "feedsbrood", 
+#        y = "# per hour")
+# 
+# incubate <- ggplot(dfSumm[dfSumm$behav == "incubate",], aes(x = nestTYPE, 
+#                    fill = nestTYPE,
+#                    y = mean, 
+#                    ymin = mean - sem,
+#                    ymax = mean + sem)) + 
+#   geom_bar(stat="identity", width = 0.5) +
+#   geom_errorbar(position = position_dodge(0.5), 
+#                 width = 0.1) +
+#   theme(text = element_text(size = 15)) +
+#   theme(legend.position = "top") +
+#   labs(x = "incubate", 
+#        y = "proportion of time")
+# 
+# manip <- ggplot(dfSumm[dfSumm$behav == "broodmanipulate",], aes(x = nestTYPE, 
+#                    fill = nestTYPE,
+#                    y = mean, 
+#                    ymin = mean - sem,
+#                    ymax = mean + sem)) + 
+#   geom_bar(stat="identity", width = 0.5) +
+#   geom_errorbar(position = position_dodge(0.5), 
+#                 width = 0.1) +
+#   theme(text = element_text(size = 15)) +
+#   theme(legend.position = "top") +
+#   labs(x = "broodmanipulate", 
+#        y = "proportion of time")
+# 
+# ggarrange(pollen, nectar, feed, incubate, manip, common.legend = TRUE)
+# ggsave("../figures/timeWorkers.jpg")
+```
+# ANALYSES
+```{r}
+queen_time <- scaled_time[scaled_time$beeID == "Queen",]
+```
+
+## queen behaviors per time
+
+### brood manipulate (ns)
+ns
+```{r}
+# visualize the distribution
+ggdensity(queen_time$broodmanipulate)
+
+m1 <- lmer(broodmanipulate ~ nestTYPE + (1|Qnatal),
+            data = queen_time)
+
+tab_model(m1)
+
+# residuals mostly normal
+modelResiduals <- resid(m1, type = "pearson") # Extract standardized residuals
+hist(modelResiduals)
+
+posthoc1 <- glht(m1, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+```
+### incubate** 
+QA > QT = QF
+```{r}
+# visualize the distribution
+ggdensity(queen_time$incubate)
+
+m1 <- glmer(incubate ~ nestTYPE + (1|Qnatal),
+            data = queen_time)
+
+tab_model(m1)
+
+# residuals mostly normal
+modelResiduals <- resid(m1, type = "pearson") # Extract standardized residuals
+hist(modelResiduals)
+
+posthoc1 <- glht(m1, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+```
+### brood feeding**
+QA > QT = QF
+```{r}
+# visualize the distribution
+ggdensity(queen_time$feedsbrood)
+
+# remove NA values
+queenFB <- queen_time[!is.na(queen_time$feedsbrood),]
+
+m1 <- glmer(feedsbrood ~ nestTYPE + (1|Qnatal),
+            data = queenFB)
+
+tab_model(m1)
+
+# residuals mostly normal
+modelResiduals <- resid(m1, type = "pearson") # Extract standardized residuals
+hist(modelResiduals)
+
+posthoc1 <- glht(m1, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+```
+### pollen foraging**
+QA = QT > QF
+```{r}
+# visualize the distribution
+ggdensity(queen_time$pollenforaging)
+
+# remove NA values
+queenPF <- queen_time[!is.na(queen_time$pollenforaging),]
+
+m1 <- glmer(pollenforaging ~ nestTYPE + (1|Qnatal),
+            data = queenPF)
+
+tab_model(m1)
+
+# residuals mostly normal
+modelResiduals <- resid(m1, type = "pearson") # Extract standardized residuals
+hist(modelResiduals)
+
+posthoc1 <- glht(m1, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+```
+### nectar foraging**
+QA = QT > QF
+```{r}
+# visualize the distribution
+ggdensity(queen_time$nectarforaging)
+
+# remove NA values
+queenNF <- queen_time[!is.na(queen_time$nectarforaging),]
+
+m1 <- glmer(nectarforaging ~ nestTYPE + (1|Qnatal),
+            data = queenNF)
+
+tab_model(m1)
+
+# residuals mostly normal
+modelResiduals <- resid(m1, type = "pearson") # Extract standardized residuals
+hist(modelResiduals)
+
+posthoc1 <- glht(m1, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+```
+#.
+# CORRELATIONS between behaviors
+```{r}
+# brood manipulating & brood feeding
+ggplot(queen_time, aes(broodmanipulate, feedsbrood, color = nestTYPE)) +
+         geom_point()
+
+cor.test(queen_time$broodmanipulate, queen_time$feedsbrood, method = "spearman")
+
+# brood manipulation & incubation
+ggplot(queen_time, aes(broodmanipulate, incubate, color = nestTYPE)) +
+         geom_point()
+cor.test(queen_time$broodmanipulate, queen_time$incubate, method = "spearman")
+
+# brood manipulation & nectar foraging
+ggplot(queen_time, aes(broodmanipulate, nectarforaging, color = nestTYPE)) +
+         geom_point()
+cor.test(queen_time$broodmanipulate, queen_time$nectarforaging, method = "spearman")
+
+# brood manipulation & pollen foraging
+ggplot(queen_time, aes(broodmanipulate, pollenforaging, color = nestTYPE)) +
+         geom_point()
+cor.test(queen_time$broodmanipulate, queen_time$pollenforaging, method = "spearman")
+
+# brood feeding & incubation
+ggplot(queen_time, aes(feedsbrood, incubate, color = nestTYPE)) +
+         geom_point()
+cor.test(queen_time$feedsbrood, queen_time$incubate, method = "spearman")
+
+# brood feeding & nectar foraging
+ggplot(queen_time, aes(feedsbrood, nectarforaging, color = nestTYPE)) +
+         geom_point()
+cor.test(queen_time$feedsbrood, queen_time$nectarforaging, method = "spearman")
+
+# brood feeding & pollen foraging
+ggplot(queen_time, aes(feedsbrood, pollenforaging, color = nestTYPE)) +
+         geom_point()
+cor.test(queen_time$feedsbrood, queen_time$pollenforaging, method = "spearman")
+
+# incubation & nectar foraging
+ggplot(queen_time, aes(incubate, nectarforaging, color = nestTYPE)) +
+         geom_point()
+cor.test(queen_time$incubate, queen_time$nectarforaging, method = "spearman")
+
+# incubation & pollen foraging
+ggplot(queen_time, aes(incubate, pollenforaging, color = nestTYPE)) +
+         geom_point()
+cor.test(queen_time$incubate, queen_time$pollenforaging, method = "spearman")
+
+# nectar foraging & pollen foraging
+ggplot(queen_time, aes(nectarforaging, pollenforaging, color = nestTYPE)) +
+         geom_point()
+cor.test(queen_time$nectarforaging, queen_time$pollenforaging, method = "spearman")
+
+# bonferroni adjustment p value: 0.05/10
+# multiply all correlation p-values by 10 to use as bonferroni-adjusted values
+```
+#.
+# NMDS & ANOSIM
+#.
+```{r}
+queen_timeU <- scaled_unfilt[scaled_unfilt$beeID == "Queen",]
+
+# make matrix of behaviors
+queen_nmds <- as.matrix(queen_timeU[, c("feedsbrood", "nectarforaging", "pollenforaging", "incubate", "broodmanipulate")]) 
+
+queen_nmds[is.na(queen_nmds)] <- 0
+
+# Run NMDS with euclidean distance
+nmds_scores <- metaMDS(queen_nmds)
+plot(nmds_scores)
+
+# Gets NMDS info for each behavior
+behav_scores <- as.data.frame(scores(nmds_scores, "species"))
+behav_scores$behav <- c("Brood feeding", "Nectar collection", "Pollen collection", "Incubation", "Brood Manipulation")
+
+# merge bee NMDS info into nmds_data
+nmds_scores <- as.data.frame(scores(nmds_scores))
+nmds_data <- cbind(queen_timeU, nmds_scores)
+
+nmds_data$nestTYPE <- ordered(nmds_data$nestTYPE, levels = c("QA", "QT", "QF"))
+
+# Plot it using ggplot
+ggplot() + 
+  stat_ellipse(data=nmds_data, aes(x=NMDS1, y=NMDS2, color = nestTYPE), level=0.95, alpha = 0.7) +
+  geom_point(data=nmds_data, aes(x=NMDS1, y=NMDS2, color = nestTYPE), size = 2.5) +
+  geom_text(data=behav_scores, aes(x=NMDS1, y=NMDS2, label=behav), size = 2.5) +
+  coord_cartesian(ylim=c(-1.35, 1.1), xlim=c(-3, 4)) +
+  labs(color = "Social configuration") +
+  scale_color_manual(values = c("#440154FF", "#238A8DFF", "#FDE725FF"),
+                       labels = c("Subsocial", "Eusocial (3W)", "Eusocial (5W)")) +
+  theme(text = element_text(size = 10)) +
+  guides(colour = guide_legend(override.aes = list(shape = 15, size = 5)))
+
+ggsave("../figures/nmds.jpg")
+
+
+##### ANOSIM #####
+
+anosim(queen_nmds, nmds_data$nestTYPE, distance = "euclidean", permutations = 9999)
+
+```
+# SCALE TO BROOD
+scaled to amount of video watched and then further scaled to number of pupae and eclosed adults in the nest. any larvae that were in the nest at the time of collection (~15-23 days after videos were taken) were freshly laid eggs or not yet laid at all the time of the video, and thus not included in the scaling. 
+(development time for eggs = 5 days, larvae = 13 days, pupae = 13 days) 
+```{r}
+# rename to differentiate new scaling method
+scaled_brood <- scaled_time
+
+# convert frequency/proportion of the total video time (scaled_time) to proportion of time per brood item (scaled_brood) in each nest
+scaled_brood$feedsbrood <- scaled_brood$feedsbrood / scaled_brood$brood
+scaled_brood$broodmanipulate <- scaled_brood$broodmanipulate / scaled_brood$brood
+scaled_brood$incubate <- scaled_brood$incubate / scaled_brood$brood
+scaled_brood$nectarforaging <- scaled_brood$nectarforaging / scaled_brood$brood
+scaled_brood$pollenforaging <- scaled_brood$pollenforaging / scaled_brood$brood
+```
+
+### plot individual nest durations
+```{r}
+# scaled_brood$nestTYPE <- ordered(scaled_brood$nestTYPE, levels = c("QA", "QT", "QF"))
+# scaled_brood$nestID <- ordered(scaled_brood$nestID, levels = c("QA01", QA02", "QA03", "QA04", "QA05", "QA06", "QA09", "QA10", "QA11", "QA12",
+#                                                         "QT01", "QT02", "QT03", "QT04", "QT08", "QT11", "QT12", "QT13", "QT14",
+#                                                         "QF02", "QF03", "QF04", "QF06", "QF07", "QF09", "QF10", "QF11", "QF12", "QF14",                                                           "QF15", "QF16"))
+# scaled_brood$beeID <- ordered(scaled_brood$beeID, levels = c("Worker", "Queen"))
+# 
+# # look at data we have so far based on each colony 
+# 
+# # # with workers
+# # 
+# # ggplot(data_sum, aes(x=nestID, y=feedsbrood, fill=Qnatal, color = beeID)) +
+# #   geom_bar(stat="identity") +
+# #   scale_color_manual(values = c("white", "white", "black")) +
+# #   theme(axis.text.x=element_text(angle=90))
+# # 
+# # ggplot(data_sum, aes(x=nestID, y=nectarforaging, fill=Qnatal, color = beeID)) +
+# #   geom_bar(stat="identity") +
+# #   scale_color_manual(values = c("white", "white", "black")) +
+# #   theme(axis.text.x=element_text(angle=90))
+# # 
+# # ggplot(data_sum, aes(x=nestID, y=pollenforaging, fill=Qnatal, color = beeID)) +
+# #   geom_bar(stat="identity") +
+# #   scale_color_manual(values = c("white", "white", "black")) +
+# #   theme(axis.text.x=element_text(angle=90))
+# 
+# # without workers
+# 
+# a <- ggplot(scaled_brood[scaled_brood$beeID == "Queen",], aes(x=nestID, y=pollenforaging, fill=Qnatal, color = nestTYPE)) +
+#   geom_bar(stat="identity") +
+#   scale_color_manual(values = c("white", "black", "white")) +
+#   theme(axis.text.x=element_text(angle=90))
+# 
+# b <- ggplot(scaled_brood[scaled_brood$beeID == "Queen",], aes(x=nestID, y=nectarforaging, fill=Qnatal, color = nestTYPE)) +
+#   geom_bar(stat="identity") +
+#   scale_color_manual(values = c("white", "black", "white")) +
+#   theme(axis.text.x=element_text(angle=90))
+# 
+# c <- ggplot(scaled_brood[scaled_brood$beeID == "Queen",], aes(x=nestID, y=feedsbrood, fill=Qnatal, color = nestTYPE)) +
+#   geom_bar(stat="identity") +
+#   scale_color_manual(values = c("white", "black", "white")) +
+#   theme(axis.text.x=element_text(angle=90))
+# 
+# d <- ggplot(scaled_brood[scaled_brood$beeID == "Queen",], aes(x=nestID, y=incubate, fill=Qnatal, color = nestTYPE)) +
+#   geom_bar(stat="identity") +
+#   scale_color_manual(values = c("white", "black", "white")) +
+#   theme(axis.text.x=element_text(angle=90))
+# 
+# e <- ggplot(scaled_brood[scaled_brood$beeID == "Queen",], aes(x=nestID, y=broodmanipulate, fill=Qnatal, color = nestTYPE)) +
+#   geom_bar(stat="identity") +
+#   scale_color_manual(values = c("white", "black", "white")) +
+#   theme(axis.text.x=element_text(angle=90))
+# 
+# ggarrange(a, b, c, d, e, common.legend = TRUE)
+
+```
+
+### plot social group queens 
+proportion of total time spent on each behavior
+```{r}
+# # look only at queens
+# scaled_broodQ <- scaled_brood[scaled_brood$beeID == "Queen",]
+# # gather behaviors into a single column to graph
+# scaled_broodQ <- scaled_broodQ %>% gather(feedsbrood, nectarforaging, pollenforaging, broodmanipulate, incubate, key = "behav", value = "time")
+# 
+# ## convert proportion to percentage
+# scaled_broodQ$time <- scaled_broodQ$time * 100
+# 
+# 
+# # order nest types to graph in order of number of bees
+# scaled_broodQ$nestTYPE <- ordered(scaled_broodQ$nestTYPE, levels = c("QA", "QT", "QF"))
+# 
+# ## summarize the data and calculate mean, sd, sem
+# dfSumm <- ddply(scaled_broodQ, 
+#                 c("behav", "nestTYPE"), 
+#                 summarise,
+#                 mean = mean(time, na.rm = TRUE), 
+#                 sd = sd(time, na.rm = TRUE),
+#                 sem = sd(time, na.rm = TRUE)/sqrt(length(time)))
+# dfSumm$behav <- ordered(dfSumm$behav, levels = c("nectarforaging", "pollenforaging", "feedsbrood", "broodmanipulate", "incubate"))
+# dfSumm
+# 
+# # # plot the summarized data in a barplot with error bars equal to sem
+# # ggplot(dfSumm, aes(x = behav, 
+# #                    y = mean, 
+# #                    fill = nestTYPE,
+# #                    ymin = mean - sem,
+# #                    ymax = mean + sem)) + 
+# #   geom_bar(position = position_dodge(),
+# #            stat="identity",
+# #            width = 0.5) +
+# #   geom_errorbar(position = position_dodge(0.5), 
+# #                 width = 0.1) +
+# #   theme(text = element_text(size = 20)) +
+# #   theme(axis.text.x = element_text(angle = 90)) +
+# #   theme(legend.position = "top") +
+# #   labs(x = "behavior", 
+# #        y = "percent time")
+# # ggsave("bar.jpeg", path = "../figures")
+# 
+# # plot each one on own axis for clarity
+# 
+# pollen <- ggplot(dfSumm[dfSumm$behav == "pollenforaging",], aes(x = behav, 
+#                    y = mean, 
+#                    fill = nestTYPE,
+#                    ymin = mean - sem,
+#                    ymax = mean + sem)) + 
+#   geom_bar(position = position_dodge(),
+#            stat="identity",
+#            width = 0.5) +
+#   geom_errorbar(position = position_dodge(0.5), 
+#                 width = 0.1) +
+#   theme(text = element_text(size = 20)) +
+#   theme(legend.position = "top") +
+#   labs(x = "", 
+#        y = "percent time")
+# 
+# nectar <- ggplot(dfSumm[dfSumm$behav == "nectarforaging",], aes(x = behav, 
+#                    y = mean, 
+#                    fill = nestTYPE,
+#                    ymin = mean - sem,
+#                    ymax = mean + sem)) + 
+#   geom_bar(position = position_dodge(),
+#            stat="identity",
+#            width = 0.5) +
+#   geom_errorbar(position = position_dodge(0.5), 
+#                 width = 0.1) +
+#   theme(text = element_text(size = 20)) +
+#   theme(legend.position = "top") +
+#   labs(x = "", 
+#        y = "percent time")
+# 
+# feed <- ggplot(dfSumm[dfSumm$behav == "feedsbrood",], aes(x = behav, 
+#                    y = mean, 
+#                    fill = nestTYPE,
+#                    ymin = mean - sem,
+#                    ymax = mean + sem)) + 
+#   geom_bar(position = position_dodge(),
+#            stat="identity",
+#            width = 0.5) +
+#   geom_errorbar(position = position_dodge(0.5), 
+#                 width = 0.1) +
+#   theme(text = element_text(size = 20)) +
+#   theme(legend.position = "top") +
+#   labs(x = "", 
+#        y = "percent time")
+# 
+# incubate <- ggplot(dfSumm[dfSumm$behav == "incubate",], aes(x = behav, 
+#                    y = mean, 
+#                    fill = nestTYPE,
+#                    ymin = mean - sem,
+#                    ymax = mean + sem)) + 
+#   geom_bar(position = position_dodge(),
+#            stat="identity",
+#            width = 0.5) +
+#   geom_errorbar(position = position_dodge(0.5), 
+#                 width = 0.1) +
+#   theme(text = element_text(size = 20)) +
+#   theme(legend.position = "top") +
+#   labs(x = "", 
+#        y = "percent time")
+# 
+# manip <- ggplot(dfSumm[dfSumm$behav == "broodmanipulate",], aes(x = behav, 
+#                    y = mean, 
+#                    fill = nestTYPE,
+#                    ymin = mean - sem,
+#                    ymax = mean + sem)) + 
+#   geom_bar(position = position_dodge(),
+#            stat="identity",
+#            width = 0.5) +
+#   geom_errorbar(position = position_dodge(0.5), 
+#                 width = 0.1) +
+#   theme(text = element_text(size = 20)) +
+#   theme(legend.position = "top") +
+#   labs(x = "", 
+#        y = "percent time")
+# 
+# ggarrange(pollen, nectar, feed, incubate, manip, common.legend = TRUE)
+```
+### plot social group queens + workers
+```{r}
+# gather data for graphing
+scaled_broodA <- scaled_brood %>% gather(feedsbrood, nectarforaging, pollenforaging, broodmanipulate, incubate, key = "behav", value = "time")
+
+# order nest types to graph in order of number of bees
+scaled_broodA$nestTYPE <- ordered(scaled_broodA$nestTYPE, levels = c("QA", "QT", "QF"))
+scaled_broodA$beeID <- ordered(scaled_broodA$beeID, levels = c("Worker", "Queen"))
+
+## summarize the data and calculate mean, sd, sem
+dfSumm <- ddply(scaled_broodA, 
+                c("behav", "beeID", "nestTYPE"), 
+                summarise,
+                mean = mean(time, na.rm = TRUE), 
+                sd = sd(time, na.rm = TRUE),
+                sem = sd(time, na.rm = TRUE)/sqrt(length(time)))
+dfSumm$behav <- ordered(dfSumm$behav, levels = c("nectarforaging", "pollenforaging", "feedsbrood", "broodmanipulate", "incubate"))
+dfSumm
+
+# ## plot the summarized data in a barplot with error bars equal to sem
+# ## important that error bar position_dodge = geom_bar width to center error bars on the graph
+# ggplot(dfSumm, aes(x = behav, 
+#                    y = mean, 
+#                    fill = nestTYPE,
+#                    ymin = mean - sem,
+#                    ymax = mean + sem)) + 
+#   geom_bar(position = position_dodge(),
+#            stat="identity",
+#            width = 0.5) +
+#   geom_errorbar(position = position_dodge(0.5), 
+#                 width = 0.1) +
+#   theme(text = element_text(size = 20)) +
+#   theme(axis.text.x = element_text(angle = 90)) +
+#   theme(legend.position = "top") +
+#   labs(x = "behavior", 
+#        y = "percent time")
+# ggsave("bar.jpeg", path = "../figures")
+
+# plot each one on own axis for clarity
+
+# update df to sum worker and queen mean so that worker error bars center on the right spot in stacked barplot
+dfSumm$Emean <- dfSumm$mean
+for (i in 1:nrow(dfSumm)) {
+  if ((dfSumm$beeID[i] == "Worker") && (dfSumm$sem[i] > 0)) {
+    for (j in 1:nrow(dfSumm)) {
+      if ((dfSumm$beeID[j] == "Queen") && (dfSumm$nestTYPE[j] == dfSumm$nestTYPE[i]) && (dfSumm$behav[j] == dfSumm$behav[i])) {
+
+        dfSumm$Emean[i] <- dfSumm$mean[i] + dfSumm$mean[j]
+
+      }
+    }
+  }
+}
+
+pollen <- ggplot(dfSumm[dfSumm$behav == "pollenforaging",], aes(x = nestTYPE, 
+                   y = mean, 
+                   fill = interaction(beeID, nestTYPE),
+                   ymin = Emean - sem,
+                   ymax = Emean + sem)) + 
+  geom_bar(stat="identity", width = 0.5) +
+  scale_fill_manual(values = c("#440154FF", "grey", "#238A8DFF", "grey", "#FDE725FF"), 
+                    labels = c("Subsocial Queen", "Eusocial (3W) Worker", "Eusocial (3W) Queen", "Eusocial (5W) Worker", "Eusocial (5W) Queen")) +          
+  geom_errorbar(width = 0.1) +
+  theme(legend.position = "none") +
+  theme(text = element_text(size = 10)) +
+  labs(x = "Pollen collection",
+       y = "# per hour per brood item",
+       fill = "Social configuration & caste") +
+  guides(fill = guide_legend(nrow = 2))
+
+
+nectar <- ggplot(dfSumm[dfSumm$behav == "nectarforaging",], aes(x = nestTYPE, 
+                   y = mean, 
+                   fill = interaction(beeID, nestTYPE),
+                   ymin = Emean - sem,
+                   ymax = Emean + sem)) + 
+  geom_bar(stat="identity", width = 0.5) +
+  scale_fill_manual(values = c("#440154FF", "grey", "#238A8DFF", "grey", "#FDE725FF"), 
+                    labels = c("Subsocial Queen", "Eusocial (3W) Worker", "Eusocial (3W) Queen", "Eusocial (5W) Worker", "Eusocial (5W) Queen")) +      
+  geom_errorbar(width = 0.1) +
+  theme(legend.position = "none") +
+  theme(text = element_text(size = 10)) +
+  labs(x = "Nectar collection",
+       y = "# per hour per brood item",
+       fill = "Social configuration & caste") +
+  guides(fill = guide_legend(nrow = 2))
+
+
+feed <- ggplot(dfSumm[dfSumm$behav == "feedsbrood",], aes(x = nestTYPE, 
+                   y = mean, 
+                   fill = interaction(beeID, nestTYPE),
+                   ymin = Emean - sem,
+                   ymax = Emean + sem)) + 
+  geom_bar(stat="identity", width = 0.5) +
+  scale_fill_manual(values = c("#440154FF", "grey", "#238A8DFF", "grey", "#FDE725FF"), 
+                    labels = c("Subsocial Queen", "Eusocial (3W) Worker", "Eusocial (3W) Queen", "Eusocial (5W) Worker", "Eusocial (5W) Queen")) +      
+  geom_errorbar(width = 0.1) +
+  theme(legend.position = "none") +
+  theme(text = element_text(size = 10)) +
+  labs(x = "Brood feeding",
+       y = "# per hour per brood item",
+       fill = "Social configuration & caste") +
+  guides(fill = guide_legend(nrow = 2))
+
+
+incubate <- ggplot(dfSumm[dfSumm$behav == "incubate",], aes(x = nestTYPE, 
+                   fill = nestTYPE,
+                   y = mean, 
+                   ymin = mean - sem,
+                   ymax = mean + sem)) + 
+  geom_bar(stat="identity", width = 0.5) +
+  geom_errorbar(stat = "identity",
+                position = position_dodge(0.5), 
+                width = 0.1) +
+  theme(legend.position = "none") +
+  theme(text = element_text(size = 10)) +
+  labs(title = "Incubation",
+       x = "Social configuration",
+       y = "Proportion of time",
+       fill = "Social configuration & caste") +
+  guides(fill = guide_legend(nrow = 2))
+
+
+manip <- ggplot(dfSumm[dfSumm$behav == "broodmanipulate",], aes(x = nestTYPE, 
+                   fill = nestTYPE,
+                   y = mean, 
+                   ymin = mean - sem,
+                   ymax = mean + sem)) + 
+  geom_bar(stat="identity", width = 0.5) +
+  geom_errorbar(stat = "identity",
+                position = position_dodge(0.5), 
+                width = 0.1) +
+  theme(legend.position = "none") +
+  theme(text = element_text(size = 10)) +
+  labs(title = "Brood manipulation",
+       x = "Social configuration",
+       y = "Proportion of time",
+       fill = "Social configuration & caste") +
+  guides(fill = guide_legend(nrow = 2))
+
+
+ggarrange(pollen, nectar, feed, incubate, manip, common.legend = TRUE)
+ggsave("../figures/broodWorkers.jpg")
+```
+
+# ANALYSES
+```{r}
+queen_brood <- scaled_brood[scaled_brood$beeID == "Queen",]
+```
+
+## nest-level behaviors per brood
+how many times was each behavior performed in a nest per brood item (when summed across workers + queens)
+only brood feeding, nectar collection, and pollen collection were scored for both workers and queens
+```{r}
+scaled_brood
+
+# rename df before manipulating
+nest_brood <- scaled_brood
+
+# add together worker and queen behaviors
+for (i in 1:nrow(nest_brood)) {                                                   # iterate through the df
+  if ((nest_brood$nestTYPE[i] != "QA") && (nest_brood$beeID[i] == "Queen")) {     # if it's not a QA group and it's a queen
+    for (j in 1:nrow(nest_brood)) {                                               # iterate throug the df again
+      if ((nest_brood$nestID[j] == nest_brood$nestID[i]) &&                       # until you find the row with the same nestID
+          (nest_brood$beeID[j] == "Worker")) {                                    # that is a worker
+                                                                                  # make all behaviors sums of the queen + worker
+        nest_brood$feedsbrood[i] <- nest_brood$feedsbrood[i] + nest_brood$feedsbrood[j] 
+        nest_brood$nectarforaging[i] <- nest_brood$nectarforaging[i] + nest_brood$nectarforaging[j]
+        nest_brood$pollenforaging[i] <- nest_brood$pollenforaging[i] + nest_brood$pollenforaging[j]
+      }
+    }
+  }
+}
+
+# then filter out worker columns b/c queen columns contain workers + queens
+nest_brood <- nest_brood[nest_brood$beeID == "Queen", ]
+nest_brood$beeID <- "nest"
+
+nest_brood
+```
+### brood feeding (ns)
+```{r}
+ggdensity(nest_brood$feedsbrood)
+
+m1 <- lmer(feedsbrood ~ nestTYPE + (1|Qnatal), data = nest_brood)
+tab_model(m1)
+
+# residuals mostly normal
+modelResiduals <- resid(m1, type = "pearson") # Extract standardized residuals
+hist(modelResiduals)
+
+posthoc1 <- glht(m1, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+```
+### nectar foraging (ns)
+```{r}
+ggdensity(nest_brood$nectarforaging)
+
+m1 <- lmer(nectarforaging ~ nestTYPE + (1|Qnatal), data = nest_brood)
+tab_model(m1)
+
+# residuals mostly normal
+modelResiduals <- resid(m1, type = "pearson") # Extract standardized residuals
+hist(modelResiduals)
+
+posthoc1 <- glht(m1, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+```
+### pollen foraging (ns)
+```{r}
+ggdensity(nest_brood$pollenforaging)
+
+m1 <- lmer(pollenforaging ~ nestTYPE + (1|Qnatal), data = nest_brood)
+tab_model(m1)
+
+# residuals mostly normal
+modelResiduals <- resid(m1, type = "pearson") # Extract standardized residuals
+hist(modelResiduals)
+
+posthoc1 <- glht(m1, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+```
+
+## queen behaviors per brood
+
+#### brood feeding**
+```{r}
+ggdensity(queen_brood$feedsbrood)
+
+m1 <- lmer(feedsbrood ~ nestTYPE + (1|Qnatal), data = queen_brood)
+tab_model(m1)
+
+# residuals mostly normal
+modelResiduals <- resid(m1, type = "pearson") # Extract standardized residuals
+hist(modelResiduals)
+
+posthoc1 <- glht(m1, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+```
+#### brood manipulate**
+```{r}
+ggdensity(queen_brood$broodmanipulate)
+
+m1 <- lmer(broodmanipulate ~ nestTYPE + (1|Qnatal), data = queen_brood)
+tab_model(m1)
+
+# residuals mostly normal
+modelResiduals <- resid(m1, type = "pearson") # Extract standardized residuals
+hist(modelResiduals)
+
+posthoc1 <- glht(m1, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+```
+#### incubate**
+```{r}
+ggdensity(queen_brood$incubate)
+
+m1 <- lmer(incubate ~ nestTYPE + (1|Qnatal), data = queen_brood)
+tab_model(m1)
+
+# residuals mostly normal
+modelResiduals <- resid(m1, type = "pearson") # Extract standardized residuals
+hist(modelResiduals)
+
+posthoc1 <- glht(m1, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+```
+#### pollen foraging**
+```{r}
+ggdensity(queen_brood$pollenforaging)
+
+m1 <- lmer(pollenforaging ~ nestTYPE + (1|Qnatal), data = queen_brood)
+tab_model(m1)
+
+# residuals mostly normal
+modelResiduals <- resid(m1, type = "pearson") # Extract standardized residuals
+hist(modelResiduals)
+
+posthoc1 <- glht(m1, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+```
+#### nectar foraging**
+```{r}
+ggdensity(queen_brood$nectarforaging)
+
+m1 <- lmer(nectarforaging ~ nestTYPE + (1|Qnatal), data = queen_brood)
+tab_model(m1)
+
+# residuals mostly normal
+modelResiduals <- resid(m1, type = "pearson") # Extract standardized residuals
+hist(modelResiduals)
+
+posthoc1 <- glht(m1, linfct = mcp(nestTYPE = "Tukey"))
+summary(posthoc1)
+```

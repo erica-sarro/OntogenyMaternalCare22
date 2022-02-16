@@ -1,0 +1,23 @@
+
+the experiment was conducted in 3 rounds. each datasheet represents a single round, in which all nests on a given datasheet were run at the same time. 
+
+column names:
+colony - unique nest identifier. QA indicates queen alone, QT indicates queen + three workers, QF indicates queen + five workers
+Q Natal - natal colony that the queen was sourced from
+Q Pulled - date the queen was pulled from her natal colony
+QID - individual queen identifier, in the form of a numbered tag glued to the bee's thorax
+Gas1 - date of first 30min CO2 treatment for the queen
+Gas2 - date of second 30min CO2 treatment for the queen
+W Natal - natal colony that the workers were sourced from
+W Pulled - date the workers were pulled from their natal colony and added to the nest
+WID - individual worker identifier, in the form of a numbered tag glued to the bee's thorax
+Eggs - date of first eggs observed in the nest
+DaysToEggs - number of days between the queen's second gas and the date of first eggs observed in the nest
+Larvae/Foraging - five days after the date of first eggs in the nest, in which eggs hatched into larvae and nests were connected to foraging chambers
+Frozen - date the nest was euthanized and frozen
+EggsToEclosion - number of days between first eggs observed in the nest and the day of the first adult offspring eclosing in the nest
+total time start to finish - number of days between queen's second gas and the first adult offspring eclosing in the nest
+Video1 - days relative to the date eggs were first observed in the nest in which we scored video for that nest at timepoint 1
+Video2 - days relative to the date eggs were first observed in the nest in which we scored video for that nest at timepoint 2
+notes - notes on this process
+Boris File Made - whether or not (Y or N) a file was made in BORIS to record video observations

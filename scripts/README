@@ -1,1 +1,3 @@
-These scripts must be run in a set order. Run cleanData.Rmd first, and nestDevelopment.Rmd second.
+Scripts created in RStudio (R v 4.0.3)
+
+These scripts must be run in a set order: Run cleanData.Rmd first, and nestDevelopment.Rmd second.

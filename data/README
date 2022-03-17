@@ -1,1 +1,25 @@
 
+NestDissections coloumn info:
+
+nestID: unique nest identifier
+e1 - e12: number of eggs in each egg cup
+larvae: number of healthy larvae
+blacklarvae: number of black larvae (likely died prior to collection)
+pupae: number of pupae
+males: number of adult males
+prePupae: number of prepupae (stage between larvae & pupae)
+notes: notes about dissections
+dissectDate: date of dissection
+initials: initials of person doing dissection
+
+
+
+
+MaleWingMeasurements column info:
+
+nestID: unique nest identifier from which male came from
+wing1: length of marginal wing cell on first wing
+wing2: length of marginal wing cell on second wing
+beeAve: average length of marginal wing cells
+measDate: date measured
+initials: initials of person measuring
